@@ -86,16 +86,21 @@ mod tests {
     }
 }
 
-// Unverified: written against the stable Win32 font-resource API, but there
-// is no Windows machine in this project's dev loop to actually compile or
-// run it against. Treat this path as best-effort until someone confirms it
-// on real Windows.
+// Confirmed to actually *compile* against the real `windows` 0.62 crate by
+// CI (see .github/workflows/build.yml) on a real Windows runner — it
+// caught two API-signature mismatches (SendMessageTimeoutW's wparam/lparam
+// aren't `Option`, they're `WPARAM`/`LPARAM`; AddFontResourceExW's flags
+// argument is the `FONT_RESOURCE_CHARACTERISTICS` value itself, not its
+// inner `.0`), now fixed. Compiling is not the same as verified correct at
+// runtime, though — nobody has confirmed this actually activates a font on
+// a real Windows machine yet.
 #[cfg(target_os = "windows")]
 mod platform {
     use super::managed_dir;
     use anyhow::{bail, Context, Result};
     use std::path::{Path, PathBuf};
     use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::Graphics::Gdi::{AddFontResourceExW, RemoveFontResourceExW, FR_PRIVATE};
     use windows::Win32::UI::WindowsAndMessaging::{
         SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_FONTCHANGE,
@@ -118,8 +123,8 @@ mod platform {
             let _ = SendMessageTimeoutW(
                 HWND_BROADCAST,
                 WM_FONTCHANGE,
-                None,
-                None,
+                WPARAM(0),
+                LPARAM(0),
                 SMTO_ABORTIFHUNG,
                 1000,
                 None,
@@ -139,7 +144,7 @@ mod platform {
             .with_context(|| format!("failed to copy {source:?} to {dest:?}"))?;
 
         let wide = wide_null(&dest);
-        let added = unsafe { AddFontResourceExW(PCWSTR(wide.as_ptr()), FR_PRIVATE.0, None) };
+        let added = unsafe { AddFontResourceExW(PCWSTR(wide.as_ptr()), FR_PRIVATE, None) };
         if added == 0 {
             bail!("AddFontResourceExW failed for {dest:?}");
         }
@@ -151,7 +156,7 @@ mod platform {
     pub fn uninstall(installed: &Path) -> Result<()> {
         let wide = wide_null(installed);
         unsafe {
-            let _ = RemoveFontResourceExW(PCWSTR(wide.as_ptr()), FR_PRIVATE.0, None);
+            let _ = RemoveFontResourceExW(PCWSTR(wide.as_ptr()), FR_PRIVATE, None);
         }
         broadcast_font_change();
 

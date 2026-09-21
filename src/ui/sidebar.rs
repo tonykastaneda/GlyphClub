@@ -1,4 +1,7 @@
-use vello::kurbo::{Affine, BezPath, Circle, Point, Rect, Stroke};
+use vello::kurbo::{Affine, BezPath, Rect, Stroke};
+#[cfg(target_os = "macos")]
+use vello::kurbo::{Circle, Point};
+#[cfg(target_os = "macos")]
 use vello::peniko::Fill;
 use vello::Scene;
 
