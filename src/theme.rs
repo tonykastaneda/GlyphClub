@@ -34,6 +34,12 @@ pub const TRAFFIC_CLOSE: Color = Color::from_rgb8(0xff, 0x5f, 0x57);
 pub const TRAFFIC_MINIMIZE: Color = Color::from_rgb8(0xff, 0xbd, 0x2e);
 pub const TRAFFIC_ZOOM: Color = Color::from_rgb8(0x28, 0xc8, 0x40);
 
+/// Stand-in for the real logo mark (Windows only — its native title bar
+/// already has its own min/maximize/close, so this sits in the same
+/// sidebar corner the macOS traffic lights occupy, not in the title bar
+/// itself). Swap for the actual logo once there is one.
+pub const LOGO_PLACEHOLDER: Color = Color::from_rgb8(0x32, 0xcd, 0x32);
+
 pub const FRAME_PAD: f64 = 12.0;
 pub const SIDEBAR_W: f64 = 236.0;
 pub const DETAIL_W: f64 = 348.0;

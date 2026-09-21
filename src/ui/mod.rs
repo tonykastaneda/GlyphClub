@@ -28,6 +28,7 @@ pub enum HitAction {
     StartScrollDrag,
     ToggleSamplePicker,
     SetSampleText(String),
+    ClearSampleText,
 }
 
 pub struct HitRegion {
@@ -292,7 +293,10 @@ fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
         action: HitAction::FocusField(Focus::SampleText),
     });
 
-    // Close.
+    // This "×" clears the field back to the "Aa" fallback — it does not
+    // close the card. The only way to close it is the toolbar's preview
+    // button (the one that opened it), so an accidental click here can't
+    // lose the card entirely, just its current text.
     let close_rect = Rect::new(card.x1 - 34.0, card.y0 + 10.0, card.x1 - 10.0, card.y0 + 34.0);
     let close_hovered = close_rect.contains(app.hover);
     scene.stroke(
@@ -317,7 +321,7 @@ fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
     );
     app.hit_regions.push(HitRegion {
         rect: close_rect,
-        action: HitAction::ToggleSamplePicker,
+        action: HitAction::ClearSampleText,
     });
 
     // Quick-fill preset chips.
@@ -785,6 +789,10 @@ pub fn handle_click(app: &mut App, point: Point) {
         }
         HitAction::SetSampleText(text) => {
             app.sample_text = text.clone();
+            app.focus = Focus::SampleText;
+        }
+        HitAction::ClearSampleText => {
+            app.sample_text.clear();
             app.focus = Focus::SampleText;
         }
         HitAction::FocusField(f) => {

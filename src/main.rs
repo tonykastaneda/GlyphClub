@@ -10,6 +10,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
 mod activate;
+mod activation_memory;
 mod app;
 mod catalog;
 mod font;

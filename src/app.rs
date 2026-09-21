@@ -135,6 +135,11 @@ pub struct App {
 
 impl App {
     pub fn new(mut catalog: Catalog) -> Self {
+        // Belt-and-suspenders: restores anything `active_memory` (see
+        // `catalog.rs`) says should be active but isn't right now, on
+        // every launch — not just after an explicit add/rescan.
+        catalog.reconcile_activation();
+
         let folders = load_folders(&catalog);
         let entries = load_entries(&catalog, "");
         let mut active_ids = catalog.active_ids().unwrap_or_default();
@@ -145,7 +150,6 @@ impl App {
                 .map(|entry| entry.id),
         );
         let favorite_ids = catalog.favorite_ids().unwrap_or_default();
-        let _ = &mut catalog;
 
         Self {
             catalog,

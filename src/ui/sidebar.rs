@@ -51,13 +51,31 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, height: f64) {
         }
     }
 
+    // Placeholder for the real logo mark — same corner the macOS traffic
+    // lights sit in, but Windows keeps its own native title bar (with its
+    // own min/maximize/close) untouched, same as how Amalith handles it,
+    // so this is purely a sidebar decoration, not window chrome.
+    #[cfg(target_os = "windows")]
+    {
+        let logo_rect = Rect::new(
+            theme::FRAME_PAD + 12.0,
+            theme::FRAME_PAD + 8.0,
+            theme::FRAME_PAD + 36.0,
+            theme::FRAME_PAD + 32.0,
+        );
+        fill_rect(scene, logo_rect, theme::LOGO_PLACEHOLDER, 6.0);
+    }
+
     let pad = theme::FRAME_PAD + 16.0;
     let right = theme::SIDEBAR_W - 16.0;
-    // Clearance for the (macOS-only) repositioned traffic lights — see
-    // `traffic_lights.rs` for where they actually land.
+    // Clearance for whatever sits above the nav list: the (macOS-only)
+    // repositioned traffic lights (see `traffic_lights.rs`), or the logo
+    // placeholder on Windows.
     #[cfg(target_os = "macos")]
     let mut y = 58.0;
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    let mut y = 54.0;
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let mut y = 30.0;
 
     let all_count = app.entries.len();

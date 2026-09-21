@@ -161,6 +161,21 @@ impl Store {
     }
 
     /// Full catalog, ordered for display (family, then weight/style).
+    /// All faces currently catalogued under one folder — used to uninstall
+    /// anything active there before the folder itself (and its `fonts`
+    /// rows, via `ON DELETE CASCADE`) is removed.
+    pub fn fonts_in_folder(&self, folder_id: i64) -> Result<Vec<FontRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size
+             FROM fonts
+             WHERE folder_id = ?1",
+        )?;
+        let rows = stmt
+            .query_map([folder_id], row_to_font)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     pub fn all_fonts(&self) -> Result<Vec<FontRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size
