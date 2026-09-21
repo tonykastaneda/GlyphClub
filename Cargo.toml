@@ -1,0 +1,40 @@
+[package]
+name = "glyphclub"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "glyphclub"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+dirs = "7"
+rayon = "1"
+rusqlite = { version = "0.40", features = ["bundled"] }
+ttf-parser = "0.25"
+walkdir = "2"
+
+# GUI: no widget toolkit — winit owns the window/event loop, wgpu is the
+# GPU backend, vello rasterizes the scene onto it. vello re-exports its
+# matched wgpu/kurbo/peniko versions, so those aren't pinned separately.
+vello = "0.10"
+winit = "0.30"
+pollster = "0.4"
+parley = { version = "0.11", features = ["system"] }
+skrifa = "0.44"
+rfd = "0.15"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+
+# Direct NSWindow access to reposition the traffic-light buttons ourselves,
+# since macOS otherwise places them at its own fixed inset regardless of
+# our layout.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSButton", "NSView"] }
+objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
+
+[dev-dependencies]
+tempfile = "3"
