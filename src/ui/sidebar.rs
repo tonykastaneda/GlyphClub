@@ -1,6 +1,4 @@
-use vello::kurbo::{Affine, BezPath, Rect, Stroke};
-#[cfg(target_os = "macos")]
-use vello::kurbo::{Circle, Point};
+use vello::kurbo::{Affine, BezPath, Cap, Circle, Join, Point, Rect, Stroke};
 #[cfg(target_os = "macos")]
 use vello::peniko::Fill;
 use vello::Scene;
@@ -21,8 +19,8 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, height: f64) {
         theme::SIDEBAR_W,
         height - theme::FRAME_PAD,
     );
-    fill_rect(scene, panel, theme::SIDEBAR_BG, 16.0);
-    stroke_rect(scene, panel, theme::SEPARATOR, 16.0, 1.0);
+    fill_rect(scene, panel, theme::SIDEBAR_BG(), 16.0);
+    stroke_rect(scene, panel, theme::SEPARATOR(), 16.0, 1.0);
 
     // Custom-drawn traffic lights: the native ones (hidden in
     // `traffic_lights.rs`) turned out to have a hard, unmovable floor
@@ -54,19 +52,30 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, height: f64) {
         }
     }
 
-    // Placeholder for the real logo mark — same corner the macOS traffic
-    // lights sit in, but Windows keeps its own native title bar (with its
-    // own min/maximize/close) untouched, same as how Amalith handles it,
-    // so this is purely a sidebar decoration, not window chrome.
+    // The real icon+wordmark lockup, same corner the macOS traffic lights
+    // sit in — Windows keeps its own native title bar (with its own
+    // min/maximize/close) untouched, same as how Amalith handles it, so
+    // this is purely a sidebar decoration, not window chrome.
     #[cfg(target_os = "windows")]
     {
-        let logo_rect = Rect::new(
+        let band_cy = theme::FRAME_PAD + 20.0;
+        let icon_rect = Rect::new(
             theme::FRAME_PAD + 12.0,
-            theme::FRAME_PAD + 8.0,
-            theme::FRAME_PAD + 36.0,
+            band_cy - 8.0,
             theme::FRAME_PAD + 32.0,
+            band_cy + 8.0,
         );
-        fill_rect(scene, logo_rect, theme::LOGO_PLACEHOLDER, 6.0);
+        crate::branding::draw_icon(scene, icon_rect, crate::branding::BRAND_LIME);
+        // Sized to the icon's own fitted height (not the raw 16px band)
+        // so the wordmark sits flush against it with no centering gap.
+        let wordmark_w = 16.0 * (190.63 / 22.87);
+        let wordmark_rect = Rect::new(
+            icon_rect.x1 + 8.0,
+            band_cy - 8.0,
+            icon_rect.x1 + 8.0 + wordmark_w,
+            band_cy + 8.0,
+        );
+        crate::branding::draw_wordmark(scene, wordmark_rect, theme::TEXT());
     }
 
     let pad = theme::FRAME_PAD + 16.0;
@@ -82,32 +91,38 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, height: f64) {
     let mut y = 30.0;
 
     let all_count = app.entries.len();
-    let starred_count = app
-        .entries
-        .iter()
-        .filter(|e| app.favorite_ids.contains(&e.id))
-        .count();
+    let starred_count = app.starred_count();
 
-    let nav_items: [(&str, Option<usize>, Option<Filter>); 2] = [
-        ("All Fonts", Some(all_count), Some(Filter::All)),
-        ("Starred", Some(starred_count), Some(Filter::Starred)),
-    ];
+    // Which of these show up at all is user-configurable — see
+    // `ui::settings`'s "Show in sidebar" section — so this filters down
+    // from the full four rather than always rendering all of them.
+    let nav_items: Vec<(&str, Option<usize>, Filter)> = [
+        ("All Fonts", Some(all_count), Filter::All, app.settings.sidebar_show_all),
+        ("System Fonts", None, Filter::System, app.settings.sidebar_show_system),
+        ("Starred", Some(starred_count), Filter::Starred, app.settings.sidebar_show_starred),
+        ("Recents", None, Filter::Recent, app.settings.sidebar_show_recent),
+    ]
+    .into_iter()
+    .filter(|&(_, _, _, show)| show)
+    .map(|(label, count, filter, _)| (label, count, filter))
+    .collect();
 
     for (label, count, filter) in nav_items {
         let rect = Rect::new(pad, y, right, y + theme::NAV_ITEM_H);
-        let selected = filter.map(|f| f == app.filter).unwrap_or(false);
+        let selected = filter == app.filter;
         if selected {
-            fill_rect(scene, rect, theme::NAV_SELECTED_BG, 8.0);
+            fill_rect(scene, rect, theme::NAV_SELECTED_BG(), 8.0);
         } else if rect.contains(app.hover) {
-            fill_rect(scene, rect, theme::NAV_HOVER_BG, 8.0);
+            fill_rect(scene, rect, theme::NAV_HOVER_BG(), 8.0);
         }
         let color = if selected {
-            theme::TEXT
+            theme::TEXT()
         } else {
-            theme::TEXT_SECONDARY
+            theme::TEXT_SECONDARY()
         };
-        draw_nav_icon(scene, label, rect.x0 + 11.0, rect.center().y - 8.0, color);
-        text.draw(scene, label, 14.0, None, color, rect.x0 + 38.0, y + 12.0);
+        let icon_x = rect.x0 + 11.0;
+        draw_nav_icon(scene, filter, icon_x, rect.center().y - 8.0, color);
+        text.draw(scene, label, 14.0, None, color, icon_x + 27.0, y + 12.0);
         if let Some(n) = count {
             let s = n.to_string();
             let tw = text.measure(&s, 12.0, None);
@@ -116,17 +131,15 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, height: f64) {
                 &s,
                 12.0,
                 None,
-                theme::TEXT_TERTIARY,
+                theme::TEXT_TERTIARY(),
                 rect.x1 - 10.0 - tw,
                 y + 11.0,
             );
         }
-        if let Some(f) = filter {
-            app.hit_regions.push(HitRegion {
-                rect,
-                action: HitAction::SelectNav(f),
-            });
-        }
+        app.hit_regions.push(HitRegion {
+            rect,
+            action: HitAction::SelectNav(filter),
+        });
         y += theme::NAV_ITEM_H + 2.0;
     }
 
@@ -137,20 +150,25 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, height: f64) {
         "LIBRARIES",
         10.0,
         None,
-        theme::TEXT_TERTIARY,
+        theme::TEXT_TERTIARY(),
         pad + 2.0,
         y + 7.0,
     );
     y += 25.0;
 
-    for folder in &app.folders {
+    // The OS's own font directories are auto-added libraries (see
+    // `Catalog::open`) so System Fonts has something to filter, but
+    // they're not a folder the user picked — showing (and letting someone
+    // remove) them here the same way as a real library would be
+    // confusing, so this list stays user-added-libraries only.
+    for folder in app.folders.iter().filter(|f| !crate::font::is_system_path(&f.path)) {
         let rect = Rect::new(pad, y, right, y + theme::FOLDER_ROW_H);
         let folder_id = folder.id;
         let selected = app.filter == Filter::Folder(folder_id);
         if selected {
-            fill_rect(scene, rect, theme::NAV_SELECTED_BG, 8.0);
+            fill_rect(scene, rect, theme::NAV_SELECTED_BG(), 8.0);
         } else if rect.contains(app.hover) {
-            fill_rect(scene, rect, theme::NAV_HOVER_BG, 8.0);
+            fill_rect(scene, rect, theme::NAV_HOVER_BG(), 8.0);
         }
         let name = folder
             .path
@@ -163,9 +181,9 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, height: f64) {
             12.5,
             None,
             if selected {
-                theme::TEXT
+                theme::TEXT()
             } else {
-                theme::TEXT_SECONDARY
+                theme::TEXT_SECONDARY()
             },
             rect.x0 + 36.0,
             y + 14.0,
@@ -175,9 +193,9 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, height: f64) {
             rect.x0 + 11.0,
             rect.center().y - 8.0,
             if selected {
-                theme::TEXT
+                theme::TEXT()
             } else {
-                theme::TEXT_SECONDARY
+                theme::TEXT_SECONDARY()
             },
         );
 
@@ -194,20 +212,20 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, height: f64) {
     // it is always available regardless of library count.
     let add_rect = Rect::new(pad, height - 48.0, right, height - 16.0);
     if add_rect.contains(app.hover) {
-        fill_rect(scene, add_rect, theme::NAV_HOVER_BG, 8.0);
+        fill_rect(scene, add_rect, theme::NAV_HOVER_BG(), 8.0);
     }
     draw_add_icon(
         scene,
         add_rect.x0 + 12.0,
         add_rect.center().y,
-        theme::TEXT_SECONDARY,
+        theme::TEXT_SECONDARY(),
     );
     text.draw(
         scene,
         "Add Library",
         13.0,
         None,
-        theme::TEXT_SECONDARY,
+        theme::TEXT_SECONDARY(),
         add_rect.x0 + 30.0,
         add_rect.y0 + 10.0,
     );
@@ -222,7 +240,7 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, height: f64) {
             &app.status,
             11.0,
             None,
-            theme::TEXT_TERTIARY,
+            theme::TEXT_TERTIARY(),
             pad,
             height - 58.0,
         );
@@ -262,18 +280,26 @@ fn draw_traffic_glyph(scene: &mut Scene, kind: usize, center: Point) {
     }
 }
 
+// All navigation icons use a 16px canvas and the same rounded stroke.
+fn nav_stroke() -> Stroke {
+    Stroke::new(1.5).with_caps(Cap::Round).with_join(Join::Round)
+}
+
 fn draw_collection_icon(scene: &mut Scene, x: f64, y: f64, color: vello::peniko::Color) {
-    let back = Rect::new(x + 1.0, y + 1.0, x + 12.0, y + 12.0);
-    let front = Rect::new(x + 4.0, y + 4.0, x + 15.0, y + 15.0);
-    for rect in [back, front] {
-        scene.stroke(
-            &Stroke::new(1.45),
-            Affine::IDENTITY,
-            color,
-            None,
-            &rect.to_rounded_rect(2.0),
-        );
-    }
+    let mut path = BezPath::new();
+    // Uppercase A with an open, legible counter.
+    path.move_to((x + 0.5, y + 13.0));
+    path.line_to((x + 4.5, y + 3.0));
+    path.line_to((x + 8.5, y + 13.0));
+    path.move_to((x + 2.0, y + 9.0));
+    path.line_to((x + 7.0, y + 9.0));
+    // Lowercase a, drawn as a single-storey letter at this small size.
+    path.move_to((x + 15.0, y + 7.0));
+    path.line_to((x + 15.0, y + 13.0));
+    path.move_to((x + 15.0, y + 10.0));
+    path.curve_to((x + 15.0, y + 6.0), (x + 10.0, y + 6.0), (x + 10.0, y + 10.0));
+    path.curve_to((x + 10.0, y + 14.0), (x + 15.0, y + 14.0), (x + 15.0, y + 10.0));
+    scene.stroke(&nav_stroke(), Affine::IDENTITY, color, None, &path);
 }
 
 fn draw_star_icon(scene: &mut Scene, x: f64, y: f64, color: vello::peniko::Color) {
@@ -292,21 +318,24 @@ fn draw_star_icon(scene: &mut Scene, x: f64, y: f64, color: vello::peniko::Color
             path.line_to(point);
         }
     }
-    scene.stroke(&Stroke::new(1.45), Affine::IDENTITY, color, None, &path);
+    scene.stroke(&nav_stroke(), Affine::IDENTITY, color, None, &path);
 }
 
 fn draw_folder_icon(scene: &mut Scene, x: f64, y: f64, color: vello::peniko::Color) {
     let mut path = BezPath::new();
-    path.move_to((x + 1.0, y + 5.0));
-    path.line_to((x + 6.0, y + 5.0));
-    path.line_to((x + 8.0, y + 2.0));
-    path.line_to((x + 12.0, y + 2.0));
-    path.line_to((x + 14.0, y + 5.0));
-    path.line_to((x + 15.0, y + 5.0));
-    path.line_to((x + 15.0, y + 14.0));
-    path.line_to((x + 1.0, y + 14.0));
+    path.move_to((x + 2.5, y + 2.5));
+    path.line_to((x + 6.0, y + 2.5));
+    path.line_to((x + 8.0, y + 4.5));
+    path.line_to((x + 13.5, y + 4.5));
+    path.quad_to((x + 15.0, y + 4.5), (x + 15.0, y + 6.0));
+    path.line_to((x + 15.0, y + 12.5));
+    path.quad_to((x + 15.0, y + 14.0), (x + 13.5, y + 14.0));
+    path.line_to((x + 2.5, y + 14.0));
+    path.quad_to((x + 1.0, y + 14.0), (x + 1.0, y + 12.5));
+    path.line_to((x + 1.0, y + 4.0));
+    path.quad_to((x + 1.0, y + 2.5), (x + 2.5, y + 2.5));
     path.close_path();
-    scene.stroke(&Stroke::new(1.45), Affine::IDENTITY, color, None, &path);
+    scene.stroke(&nav_stroke(), Affine::IDENTITY, color, None, &path);
 }
 
 fn draw_add_icon(scene: &mut Scene, x: f64, y: f64, color: vello::peniko::Color) {
@@ -315,13 +344,38 @@ fn draw_add_icon(scene: &mut Scene, x: f64, y: f64, color: vello::peniko::Color)
     path.line_to((x + 5.0, y));
     path.move_to((x, y - 5.0));
     path.line_to((x, y + 5.0));
-    scene.stroke(&Stroke::new(1.6), Affine::IDENTITY, color, None, &path);
+    scene.stroke(&nav_stroke(), Affine::IDENTITY, color, None, &path);
 }
 
-fn draw_nav_icon(scene: &mut Scene, label: &str, x: f64, y: f64, color: vello::peniko::Color) {
-    match label {
-        "All Fonts" => draw_collection_icon(scene, x, y, color),
-        "Starred" => draw_star_icon(scene, x, y, color),
+pub(super) fn draw_nav_icon(scene: &mut Scene, filter: Filter, x: f64, y: f64, color: vello::peniko::Color) {
+    match filter {
+        Filter::All => draw_collection_icon(scene, x, y, color),
+        Filter::System => draw_system_icon(scene, x, y, color),
+        Filter::Starred => draw_star_icon(scene, x, y, color),
+        Filter::Recent => draw_clock_icon(scene, x, y, color),
         _ => {}
     }
+}
+
+/// A monitor represents fonts supplied by the computer's operating system.
+fn draw_system_icon(scene: &mut Scene, x: f64, y: f64, color: vello::peniko::Color) {
+    let screen = Rect::new(x + 1.0, y + 2.0, x + 15.0, y + 11.0);
+    scene.stroke(&nav_stroke(), Affine::IDENTITY, color, None, &screen.to_rounded_rect(1.5));
+    let mut stand = BezPath::new();
+    stand.move_to((x + 8.0, y + 11.0));
+    stand.line_to((x + 8.0, y + 14.0));
+    stand.move_to((x + 5.0, y + 14.0));
+    stand.line_to((x + 11.0, y + 14.0));
+    scene.stroke(&nav_stroke(), Affine::IDENTITY, color, None, &stand);
+}
+
+fn draw_clock_icon(scene: &mut Scene, x: f64, y: f64, color: vello::peniko::Color) {
+    let center = Point::new(x + 8.0, y + 8.0);
+    scene.stroke(&nav_stroke(), Affine::IDENTITY, color, None, &Circle::new(center, 7.0));
+    let mut hands = BezPath::new();
+    hands.move_to(center);
+    hands.line_to((center.x, center.y - 4.2));
+    hands.move_to(center);
+    hands.line_to((center.x + 3.4, center.y + 1.0));
+    scene.stroke(&nav_stroke(), Affine::IDENTITY, color, None, &hands);
 }
