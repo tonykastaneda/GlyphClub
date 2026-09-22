@@ -3,8 +3,10 @@
 //! every font file the catalog has loaded a live preview for) and parley's
 //! reusable shaping buffers.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use parley::editing::{PlainEditor, PlainEditorDriver};
 use parley::fontique::Blob;
 use parley::{
     FontContext, FontFamily, GenericFamily, Layout, LayoutContext, PositionedLayoutItem,
@@ -14,9 +16,30 @@ use vello::kurbo::Affine;
 use vello::peniko::{Brush, Color, Fill};
 use vello::{Glyph, Scene};
 
+/// Every `build()` call — one per visible tile/row label per frame, with no
+/// caller-side caching of its own — re-runs full parley shaping, which at
+/// 100k+-font scale means a fontique font-selection + cmap charmap query per
+/// glyph, every frame, for every visible piece of text. Most of that text
+/// (toolbar/sidebar/nav labels every frame; tile labels across repeated
+/// frames while idle or scrolled back over) is byte-identical to a recent
+/// call, so a small cache of already-shaped layouts turns those into a
+/// cheap clone instead of a full reshape. Capped and cleared wholesale
+/// rather than kept as a true LRU: simple, and a 150k-entry library means
+/// unbounded growth is a real risk otherwise.
+const LAYOUT_CACHE_CAP: usize = 4096;
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct LayoutKey {
+    text: Box<str>,
+    size_bits: u32,
+    family: Option<Box<str>>,
+    color_bits: [u32; 4],
+}
+
 pub struct TextCx {
     fonts: FontContext,
     layout_cx: LayoutContext<Brush>,
+    cache: HashMap<LayoutKey, Layout<Brush>>,
 }
 
 impl TextCx {
@@ -24,7 +47,19 @@ impl TextCx {
         Self {
             fonts: FontContext::new(),
             layout_cx: LayoutContext::new(),
+            cache: HashMap::new(),
         }
+    }
+
+    /// A driver for operating on `editor` (the Preview tab's
+    /// `App::preview_editor`) — every `PlainEditor` mutation (cursor
+    /// movement, selection, inserting/deleting text, rebuilding its layout)
+    /// goes through one of these, and building one needs the same
+    /// `FontContext`/`LayoutContext` this `TextCx` already owns privately
+    /// for its own `build()`. Borrowed fresh each call rather than stored,
+    /// same as everything else here.
+    pub fn preview_driver<'a>(&'a mut self, editor: &'a mut PlainEditor<Brush>) -> PlainEditorDriver<'a, Brush> {
+        editor.driver(&mut self.fonts, &mut self.layout_cx)
     }
 
     /// Registers a font file's raw bytes with the font database and returns
@@ -49,6 +84,15 @@ impl TextCx {
         family: Option<&str>,
         color: Color,
     ) -> Layout<Brush> {
+        let key = LayoutKey {
+            text: text.into(),
+            size_bits: size.to_bits(),
+            family: family.map(Into::into),
+            color_bits: color.components.map(f32::to_bits),
+        };
+        if let Some(cached) = self.cache.get(&key) {
+            return cached.clone();
+        }
         let mut builder = self
             .layout_cx
             .ranged_builder(&mut self.fonts, text, 1.0, true);
@@ -60,6 +104,10 @@ impl TextCx {
         builder.push_default(StyleProperty::Brush(Brush::Solid(color)));
         let mut layout: Layout<Brush> = builder.build(text);
         layout.break_all_lines(None);
+        if self.cache.len() >= LAYOUT_CACHE_CAP {
+            self.cache.clear();
+        }
+        self.cache.insert(key, layout.clone());
         layout
     }
 
@@ -85,6 +133,19 @@ impl TextCx {
         }
         let layout = self.build(text, size, family, color);
         emit(scene, &layout, color, Affine::translate((x, y)));
+    }
+
+    /// The height `draw`/`measure`'s own layout box would need for `text`
+    /// at `size` — real ascent+descent+leading from the actual font, not
+    /// a guessed multiple of `size`. A caller reserving vertical space for
+    /// a specimen line (e.g. the detail panel's Sizes tab, one row per
+    /// point size) needs this rather than assuming `size * some_constant`
+    /// is close enough: real line-height ratios vary per font, and a
+    /// too-small guess means each row's specimen visually bleeds down
+    /// into the next row's label instead of stopping where its own row
+    /// ends.
+    pub fn measure_height(&mut self, text: &str, size: f32, family: Option<&str>) -> f64 {
+        self.build(text, size, family, Color::WHITE).height() as f64
     }
 
     /// Draws `text` with its glyph box (ascent+descent, not the taller
@@ -150,7 +211,13 @@ impl TextCx {
     }
 }
 
-fn emit(scene: &mut Scene, layout: &Layout<Brush>, color: Color, transform: Affine) {
+/// Draws an already-built `Layout<Brush>` — the same glyph-emission code
+/// every `TextCx` draw method funnels through, exposed so a caller holding
+/// its *own* long-lived layout (the Preview tab's `parley::PlainEditor`,
+/// which owns a `Layout<Brush>` across frames rather than going through
+/// `TextCx::build`'s per-call cache) can render it without a second copy of
+/// this loop.
+pub(crate) fn emit(scene: &mut Scene, layout: &Layout<Brush>, color: Color, transform: Affine) {
     for line in layout.lines() {
         for item in line.items() {
             let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
