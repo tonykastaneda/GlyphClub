@@ -2,8 +2,8 @@ use vello::kurbo::{Affine, Circle, Point, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
 
-use super::{fill_rect, stroke_rect, HitAction, HitRegion};
-use crate::app::App;
+use super::{draw_format_badge, fill_rect, stroke_rect, truncate_to_width, HitAction, HitRegion};
+use crate::app::{App, VisibleIdsCacheKey};
 use crate::text::TextCx;
 use crate::theme;
 
@@ -53,10 +53,20 @@ pub fn draw_grid(
     let (columns, tile_w) = columns_and_tile_w(min_tile_w, content_w);
     let row_h = preview_h + theme::GRID_GAP;
 
-    let ids: Vec<i64> = app.visible_entries().iter().map(|e| e.id).collect();
+    let ids_key = VisibleIdsCacheKey {
+        entries_version: app.entries_version,
+        favorites_version: app.favorites_version,
+        filter: app.filter,
+        search: app.search.clone(),
+    };
+    let ids = match app.visible_ids_cache.take() {
+        Some((cached_key, ids)) if cached_key == ids_key => ids,
+        _ => app.visible_entries().iter().map(|e| e.id).collect(),
+    };
     let total = ids.len();
 
     if total == 0 {
+        app.visible_ids_cache = Some((ids_key, ids));
         draw_empty_state(app, text, scene, x0, x1, y0, height);
         return;
     }
@@ -98,6 +108,7 @@ pub fn draw_grid(
         total_rows as f64 * row_h,
         viewport_h,
     );
+    app.visible_ids_cache = Some((ids_key, ids));
 }
 
 fn draw_tile(
@@ -110,20 +121,31 @@ fn draw_tile(
     size: f64,
     preview_h: f64,
 ) {
+    // One lookup, not three — `App::entry` is O(1), but even so, a tile
+    // shouldn't hash the same id into `entries_by_id` repeatedly when one
+    // lookup already has everything the rest of this function needs.
+    let (has_entry, is_system, is_unknown, fam, sub, path) = match app.entry(id) {
+        Some(e) => (
+            true,
+            e.is_system,
+            e.family.eq_ignore_ascii_case("unknown"),
+            e.family.clone(),
+            e.subfamily.clone(),
+            e.path.clone(),
+        ),
+        None => (false, false, true, String::new(), String::new(), String::new()),
+    };
+
     let tile_rect = Rect::new(x, y, x + size, y + preview_h);
     let selected = app.selected == Some(id);
-    let is_system = app
-        .entries
-        .iter()
-        .any(|entry| entry.id == id && entry.is_system);
     let active = app.active_ids.contains(&id) || is_system;
 
     let border = if selected {
-        theme::ACCENT
+        theme::BRAND_ACCENT()
     } else {
-        theme::TILE_BORDER
+        theme::TILE_BORDER()
     };
-    fill_rect(scene, tile_rect, theme::TILE_BG, 12.0);
+    fill_rect(scene, tile_rect, theme::TILE_BG(), 12.0);
     stroke_rect(
         scene,
         tile_rect,
@@ -134,16 +156,20 @@ fn draw_tile(
 
     let preview_rect = Rect::new(x, y, x + size, y + preview_h);
     let sample = app.effective_sample_text().to_string();
-    let is_unknown = app
-        .entries
-        .iter()
-        .find(|entry| entry.id == id)
-        .is_some_and(|entry| entry.family.eq_ignore_ascii_case("unknown"));
-    let family = if is_unknown {
+    // A font that doesn't actually have glyphs for the sample text (common
+    // once System Fonts is in the mix — plenty of OS-bundled fonts only
+    // cover one script) would otherwise silently render in whatever
+    // fallback font the text engine substitutes, at full brightness, as if
+    // it were genuinely supported. Falling back to the system font *and*
+    // dimming the color is what actually signals "this one doesn't have
+    // it" — matching the greyed-out look real font managers use for this.
+    let covers_sample = !is_unknown && app.covers_sample(id);
+    let family = if is_unknown || !covers_sample {
         None
     } else {
         app.preview_family(text, id)
     };
+    let sample_color = if covers_sample { theme::TEXT() } else { theme::TEXT_TERTIARY() };
     // Every tile in the grid shares this one ground line regardless of
     // which font it's previewing — different fonts have different
     // ascent-to-size ratios, so lining them up by baseline (not by the
@@ -158,22 +184,28 @@ fn draw_tile(
         &sample,
         sample_size as f32,
         family.as_deref(),
-        theme::TEXT,
+        sample_color,
         sample_x,
         baseline_y,
     );
     scene.pop_layer();
 
-    let entry_label = app
-        .entries
-        .iter()
-        .find(|e| e.id == id)
-        .map(|e| (e.family.clone(), e.subfamily.clone()));
-    if let Some((fam, sub)) = entry_label {
+    if has_entry {
         // Centered against the same [y+10, y+28] band the activation pip
         // below is centered in, so the two don't drift apart the way a
         // fixed top-origin baseline would.
-        text.draw_centered_v(scene, &fam, 12.0, None, theme::TEXT, x + 32.0, y + 10.0, y + 28.0);
+        let badge_w = draw_format_badge(
+            scene,
+            crate::font::format_label(&path),
+            x + 32.0,
+            y + 10.0,
+            y + 28.0,
+            theme::TEXT_TERTIARY(),
+        );
+        let name_x = x + 32.0 + if badge_w > 0.0 { badge_w + 6.0 } else { 0.0 };
+        let name_max_w = (x + size - 12.0 - name_x).max(0.0);
+        let fam = truncate_to_width(text, &fam, 12.0, None, name_max_w);
+        text.draw_centered_v(scene, &fam, 12.0, None, theme::TEXT(), name_x, y + 10.0, y + 28.0);
         let _ = sub;
     }
 
@@ -183,9 +215,9 @@ fn draw_tile(
         draw_system_lock(scene, dot_rect.center(), 1.0);
     } else {
         let dot_color = if active {
-            theme::GREEN
+            theme::GREEN()
         } else {
-            theme::DOT_INACTIVE
+            theme::DOT_INACTIVE()
         };
         scene.fill(
             Fill::NonZero,
@@ -211,7 +243,7 @@ fn draw_tile(
 
 /// A thin draggable thumb on the content area's right edge — hidden
 /// entirely when everything already fits without scrolling.
-fn draw_scrollbar(
+pub(super) fn draw_scrollbar(
     app: &mut App,
     scene: &mut Scene,
     x1: f64,
@@ -243,9 +275,9 @@ fn draw_scrollbar(
 
     let grab_rect = Rect::new(track_x0 - 3.0, y0, track_x1 + 3.0, y1);
     let color = if app.dragging_scrollbar || grab_rect.contains(app.hover) {
-        theme::TEXT_SECONDARY
+        theme::TEXT_SECONDARY()
     } else {
-        theme::TEXT_TERTIARY
+        theme::TEXT_TERTIARY()
     };
     fill_rect(scene, thumb_rect, color, (track_x1 - track_x0) / 2.0);
 
@@ -256,7 +288,7 @@ fn draw_scrollbar(
     });
 }
 
-fn draw_empty_state(
+pub(super) fn draw_empty_state(
     _app: &App,
     text: &mut TextCx,
     scene: &mut Scene,
@@ -267,6 +299,16 @@ fn draw_empty_state(
 ) {
     let cx = (x0 + x1) / 2.0;
     let cy = y0 + (height - y0) / 2.0;
+
+    let mark_size = 64.0;
+    let mark_rect = Rect::new(
+        cx - mark_size / 2.0,
+        cy - mark_size - 14.0,
+        cx + mark_size / 2.0,
+        cy - 14.0,
+    );
+    crate::branding::draw_icon(scene, mark_rect, theme::TEXT_TERTIARY());
+
     let msg = "No fonts to show";
     let tw = text.measure(msg, 15.0, None);
     text.draw(
@@ -274,15 +316,20 @@ fn draw_empty_state(
         msg,
         15.0,
         None,
-        theme::TEXT_SECONDARY,
+        theme::TEXT_SECONDARY(),
         cx - tw / 2.0,
         cy,
     );
 }
 
 /// A system font is already available to the OS, so it uses a fixed lock
-/// instead of the user-toggleable activation pip.
-fn draw_system_lock(scene: &mut Scene, center: Point, scale: f64) {
+/// instead of the user-toggleable activation pip — sized to the same ~9px
+/// footprint as that pip's dot (`Circle::new(_, 4.5)`), not its own larger
+/// natural proportions, so a row/tile of mixed system and user fonts reads
+/// as one consistent-size indicator column rather than the lock visually
+/// outsizing the dots next to it.
+pub(super) fn draw_system_lock(scene: &mut Scene, center: Point, scale: f64) {
+    let scale = scale * 0.87;
     let shackle = Rect::new(
         center.x - 3.2 * scale,
         center.y - 5.5 * scale,
@@ -292,7 +339,7 @@ fn draw_system_lock(scene: &mut Scene, center: Point, scale: f64) {
     scene.stroke(
         &Stroke::new(1.3 * scale),
         Affine::IDENTITY,
-        theme::GREEN,
+        theme::GREEN(),
         None,
         &shackle.to_rounded_rect(4.0 * scale),
     );
@@ -302,197 +349,12 @@ fn draw_system_lock(scene: &mut Scene, center: Point, scale: f64) {
         center.x + 4.3 * scale,
         center.y + 4.8 * scale,
     );
-    fill_rect(scene, body, theme::GREEN, 2.0 * scale);
+    fill_rect(scene, body, theme::GREEN(), 2.0 * scale);
     scene.fill(
         Fill::NonZero,
         Affine::IDENTITY,
-        theme::TILE_BG,
+        theme::TILE_BG(),
         None,
         &Circle::new(Point::new(center.x, center.y + 2.0 * scale), 0.8 * scale),
     );
-}
-
-pub fn draw_list(
-    app: &mut App,
-    text: &mut TextCx,
-    scene: &mut Scene,
-    x0: f64,
-    x1: f64,
-    y0: f64,
-    height: f64,
-) {
-    let viewport_h = (height - y0).max(0.0);
-    let ids: Vec<i64> = app.visible_entries().iter().map(|e| e.id).collect();
-    let total = ids.len();
-
-    if total == 0 {
-        draw_empty_state(app, text, scene, x0, x1, y0, height);
-        return;
-    }
-
-    // Same zoom control as the grid: row height (and everything in it)
-    // scales with `tile_size` relative to its default, rather than list
-    // view ignoring it and staying a fixed height.
-    let row_h = theme::ROW_H * (app.tile_size / theme::DEFAULT_TILE);
-
-    let max_scroll = (total as f64 * row_h - viewport_h).max(0.0);
-    app.scroll_y = app.scroll_y.clamp(0.0, max_scroll);
-
-    let start = (app.scroll_y / row_h).floor().max(0.0) as usize;
-    let visible = (viewport_h / row_h).ceil() as usize + 2;
-    let end = (start + visible).min(total);
-
-    scene.push_clip_layer(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        &Rect::new(x0, y0, x1, height),
-    );
-
-    for i in start..end {
-        let id = ids[i];
-        let row_y = y0 + i as f64 * row_h - app.scroll_y;
-        draw_list_row(app, text, scene, id, x0, x1, row_y, row_h);
-    }
-
-    scene.pop_layer();
-    draw_scrollbar(app, scene, x1, y0, height, total as f64 * row_h, viewport_h);
-}
-
-fn draw_list_row(
-    app: &mut App,
-    text: &mut TextCx,
-    scene: &mut Scene,
-    id: i64,
-    x0: f64,
-    x1: f64,
-    y: f64,
-    row_h: f64,
-) {
-    let s = row_h / theme::ROW_H;
-    let rect = Rect::new(x0, y, x1, y + row_h);
-    let selected = app.selected == Some(id);
-    let is_system = app
-        .entries
-        .iter()
-        .any(|entry| entry.id == id && entry.is_system);
-    let active = app.active_ids.contains(&id) || is_system;
-    let favorite = app.favorite_ids.contains(&id);
-
-    if selected {
-        fill_rect(scene, rect, theme::ACCENT, 0.0);
-    } else if rect.contains(app.hover) {
-        fill_rect(scene, rect, theme::CONTROL_BG, 0.0);
-    }
-
-    let dot_center = vello::kurbo::Point::new(x0 + 26.0 * s, y + row_h / 2.0);
-    if is_system {
-        draw_system_lock(scene, dot_center, s);
-    } else {
-        scene.fill(
-            Fill::NonZero,
-            Affine::IDENTITY,
-            if active {
-                theme::GREEN
-            } else {
-                theme::DOT_INACTIVE
-            },
-            None,
-            &Circle::new(dot_center, 3.5 * s),
-        );
-        app.hit_regions.push(HitRegion {
-            rect: Rect::new(
-                dot_center.x - 9.0,
-                dot_center.y - 9.0,
-                dot_center.x + 9.0,
-                dot_center.y + 9.0,
-            ),
-            action: HitAction::ToggleActivation(id),
-        });
-    }
-
-    let entry_label = app.entries.iter().find(|e| e.id == id).map(|e| {
-        (
-            e.family.clone(),
-            e.subfamily.clone(),
-            e.italic,
-            e.monospace,
-            e.weight,
-        )
-    });
-    if let Some((family_name, subfamily, italic, monospace, weight)) = entry_label {
-        let is_unknown = family_name.eq_ignore_ascii_case("unknown");
-        let family_font = if is_unknown {
-            None
-        } else {
-            app.preview_family(text, id)
-        };
-        let color = theme::TEXT;
-        // The family name itself renders in the font it names — the same
-        // live preview the grid uses — not the UI's own font; only the
-        // meta line below it (subfamily/weight) is chrome text.
-        let specimen_size = (16.0 * s).clamp(11.0, 34.0);
-        text.draw_centered_v(
-            scene,
-            &family_name,
-            specimen_size as f32,
-            family_font.as_deref(),
-            color,
-            x0 + 44.0 * s,
-            y + row_h * 0.18,
-            y + row_h * 0.68,
-        );
-
-        let mut bits = vec![subfamily];
-        if italic {
-            bits.push("Italic".to_string());
-        }
-        if monospace {
-            bits.push("Mono".to_string());
-        }
-        let meta = format!("{} \u{00b7} weight {}", bits.join(" \u{00b7} "), weight);
-        let meta_color = if selected {
-            theme::TEXT_SECONDARY
-        } else {
-            theme::TEXT_TERTIARY
-        };
-        text.draw(
-            scene,
-            &meta,
-            (10.5 * s).clamp(9.0, 15.0) as f32,
-            None,
-            meta_color,
-            x0 + 44.0 * s,
-            y + row_h * 0.72,
-        );
-    }
-
-    let star_rect = Rect::new(
-        x1 - 34.0,
-        y + row_h / 2.0 - 9.0,
-        x1 - 16.0,
-        y + row_h / 2.0 + 9.0,
-    );
-    let star_color = if favorite {
-        theme::GOLD
-    } else {
-        theme::DOT_INACTIVE
-    };
-    text.draw(
-        scene,
-        "\u{2605}",
-        11.0,
-        None,
-        star_color,
-        star_rect.x0 + 2.0,
-        star_rect.y0 + 13.0,
-    );
-    app.hit_regions.push(HitRegion {
-        rect: star_rect,
-        action: HitAction::ToggleFavorite(id),
-    });
-
-    app.hit_regions.push(HitRegion {
-        rect,
-        action: HitAction::SelectFont(id),
-    });
 }
