@@ -3,13 +3,27 @@ name = "glyphclub"
 version = "0.1.0"
 edition = "2021"
 
+# Capitalized (unlike `[package].name`, which crates.io convention keeps
+# lowercase) because this is also the actual built executable's filename —
+# with no `Info.plist`/`.app` bundle to pull a display name from instead,
+# macOS's menu bar falls back to that literal filename for the bold app
+# menu title, so this is what makes it read "GlyphClub" there instead of
+# "glyphclub".
 [[bin]]
-name = "glyphclub"
+name = "GlyphClub"
 path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
 dirs = "7"
+# Only used to hard-disable the `log` facade at startup (see `main.rs`) —
+# parley's text shaping logs a `log::warn!` through it on every single
+# layout call that touches a CJK codepoint with no ICU4X segmentation data
+# bundled (common: plenty of macOS system font names are CJK), and at
+# real-library scale (100k+ fonts) that's enough log-formatting-and-I/O
+# overhead alone to visibly stall the UI, independent of the (also real,
+# also fixed) O(n) algorithmic issues elsewhere in this pass.
+log = "0.4"
 rayon = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 ttf-parser = "0.25"
@@ -26,17 +40,29 @@ pollster = "0.4"
 parley = { version = "0.11", features = ["system"] }
 skrifa = "0.44"
 rfd = "0.15"
+notify-debouncer-mini = "0.7.0"
+filetime = "0.2.29"
+# Local-time formatting for the list view's Date Added column.
+chrono = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+# Decodes the branding PNG into RGBA for winit's `Icon::from_rgba` (taskbar
+# / title-bar icon) — png-only, no need for the rest of `image`'s formats.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Direct NSWindow access to reposition the traffic-light buttons ourselves,
 # since macOS otherwise places them at its own fixed inset regardless of
-# our layout.
+# our layout. NSApplication/NSImage set the real dock icon from the same
+# branding PNG.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSButton", "NSView"] }
-objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSButton", "NSView", "NSApplication", "NSImage"] }
+objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSData", "NSUserDefaults", "NSString"] }
+# The native macOS menu bar (see `native_menu.rs`) — same crate/version
+# Amalith uses for its own menu bar, kept off Windows for now since that
+# platform has its own separate menu plan.
+muda = "0.19"
 
 [dev-dependencies]
 tempfile = "3"

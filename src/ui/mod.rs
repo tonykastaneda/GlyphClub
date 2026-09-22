@@ -1,5 +1,7 @@
 mod detail;
 mod grid;
+mod list;
+mod settings;
 mod sidebar;
 
 use vello::kurbo::{Affine, Arc, BezPath, Circle, Line, Point, Rect, Stroke, Vec2};
@@ -7,6 +9,7 @@ use vello::peniko::Fill;
 use vello::Scene;
 
 use crate::app::{App, Filter, Focus, ViewMode};
+use crate::settings::SettingToggle;
 use crate::text::TextCx;
 use crate::theme;
 
@@ -21,14 +24,68 @@ pub enum HitAction {
     SelectFont(i64),
     ToggleActivation(i64),
     ToggleFavorite(i64),
-    CloseDetail,
     ToggleDetailFavorite,
     ToggleDetailPanel,
     StartTileSizeDrag,
     StartScrollDrag,
+    /// Mousedown on the detail panel's own left-edge resize handle — see
+    /// `App::detail_w`/`update_detail_resize_from_point`.
+    StartDetailResize,
     ToggleSamplePicker,
     SetSampleText(String),
     ClearSampleText,
+    /// The Preview tab's quick-preset dropdown (see `ui::detail`).
+    TogglePreviewPresetDropdown,
+    /// Records the chosen preset for `ui::detail::draw_preview_tab` to
+    /// actually apply next frame — `handle_click` has no `TextCx` to drive
+    /// `App::preview_editor`'s layout rebuild with, but that function does.
+    SetPendingPreviewPreset(&'static str),
+    SetPreviewAlign(crate::app::TextAlign),
+    TogglePreviewSizeDropdown,
+    SetPreviewSize(f64),
+    AssignDrop(i64),
+    CancelDrop,
+    /// Mousedown on a list-view column header's label area — not yet a
+    /// sort (that only fires if the pointer never moves past a small
+    /// threshold before release) or a reorder (that fires if it does).
+    /// See `App::header_press`.
+    PressColumnHeader(usize),
+    /// Mousedown on a column header's right-edge resize handle — always a
+    /// resize, no click-vs-drag ambiguity to resolve.
+    StartColumnResize(usize),
+    ToggleFamilyExpanded(String),
+    ConfirmDelete(i64),
+    CancelDelete,
+    /// Hand-rolled Windows menu bar (see `draw_windows_menu_bar`) — opens
+    /// the clicked top-level menu's dropdown, or closes it if it's the one
+    /// already open.
+    OpenWinMenu(crate::app::WinMenuKind),
+    ActivateSelected,
+    ActivateSelectedTemporarily,
+    DeactivateSelected,
+    ExportSelectedFont,
+    RevealSelectedFont,
+    RemoveSelectedFromFontlist,
+    RequestDeleteSelected,
+    ZoomIn,
+    ZoomOut,
+    OpenGitHub,
+    /// Detail panel's tab bar — see `crate::app::DetailTab`.
+    SetDetailTab(crate::app::DetailTab),
+    ToggleGlyphBlockDropdown,
+    /// `None` = "All" (no filter).
+    SetGlyphBlockFilter(Option<&'static str>),
+    /// Opens the Settings overlay — see `ui::settings`. Reachable from the
+    /// hand-rolled Windows File menu; macOS's native app-menu "Settings…"
+    /// item goes through `native_menu::MenuAction::OpenSettings` instead,
+    /// set directly rather than via a `HitRegion` click.
+    OpenSettings,
+    /// The close button, or a click on the dimmed backdrop outside the
+    /// panel — see `ui::settings::draw`.
+    CloseSettings,
+    ToggleSetting(SettingToggle),
+    ToggleAppearanceDropdown,
+    SetAppearance(crate::settings::Appearance),
 }
 
 pub struct HitRegion {
@@ -74,6 +131,68 @@ pub fn stroke_rect(
         .inset(width / 2.0)
         .to_rounded_rect((radius - width / 2.0).max(0.0));
     scene.stroke(&Stroke::new(width), Affine::IDENTITY, color, None, &shape);
+}
+
+/// The OpenType/TrueType format badge — the real center marks cropped out
+/// of `branding/SVG/otf.svg`/`ttf.svg` (see `branding::draw_otf_mark`/
+/// `draw_ttf_mark`), not hand-drawn or text-rendered. Sits between the
+/// activation pip and the font name in both grid tiles and list rows
+/// (`ui::grid`/`ui::list`). Draws nothing for a format this doesn't
+/// recognize (`crate::font::format_label`'s "Unknown"), and returns the
+/// width actually used (`0.0` in that case) so the caller knows how much
+/// to shift the name text over by.
+pub fn draw_format_badge(scene: &mut Scene, format: &str, x: f64, y0: f64, y1: f64, color: vello::peniko::Color) -> f64 {
+    let h = (y1 - y0).min(10.5);
+    let target = Rect::new(x, (y0 + y1) / 2.0 - h / 2.0, x + h * 1.3, (y0 + y1) / 2.0 + h / 2.0);
+    if format.starts_with("OpenType") {
+        crate::branding::draw_otf_mark(scene, target, color)
+    } else if format.starts_with("TrueType") {
+        crate::branding::draw_ttf_mark(scene, target, color)
+    } else {
+        0.0
+    }
+}
+
+/// `content` as-is if it already fits `max_w`, otherwise trimmed from the
+/// end and suffixed with an ellipsis until it does — a long family name
+/// (real ones run surprisingly long: "FONTSPRING DEMO - PODIUM Sharp 2.1")
+/// would otherwise just draw straight past a tile's or row's own right
+/// edge instead of stopping there.
+pub fn truncate_to_width(text: &mut TextCx, content: &str, size: f32, family: Option<&str>, max_w: f64) -> String {
+    if max_w <= 0.0 || text.measure(content, size, family) <= max_w {
+        return content.to_string();
+    }
+    const ELLIPSIS: &str = "\u{2026}";
+    let ellipsis_w = text.measure(ELLIPSIS, size, family);
+    if ellipsis_w > max_w {
+        return String::new();
+    }
+    let budget = max_w - ellipsis_w;
+    let chars: Vec<char> = content.chars().collect();
+    // Binary search for the longest fitting prefix — `measure`'s width is
+    // monotonic in prefix length, so this needs `O(log n)` calls to it
+    // instead of trying every length from the end down one at a time.
+    // That distinction matters a lot in practice: `measure` isn't a cheap
+    // string-length check, it's a full font-selection-and-shape pass, and
+    // this runs for every over-long tile/row name, every frame — at a
+    // real library's scale (100k+ fonts, many with long or CJK names) the
+    // difference between `O(log n)` and `O(n)` here alone was measured to
+    // be the single biggest contributor to this app struggling to scroll.
+    let (mut lo, mut hi) = (0usize, chars.len());
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        let candidate: String = chars[..mid].iter().collect();
+        if text.measure(&candidate, size, family) <= budget {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if lo == 0 {
+        return ELLIPSIS.to_string();
+    }
+    let prefix: String = chars[..lo].iter().collect();
+    format!("{prefix}{ELLIPSIS}")
 }
 
 /// A circular-arrow refresh glyph — replaces what used to be a bare "R"
@@ -147,25 +266,41 @@ fn draw_list_icon(scene: &mut Scene, cx: f64, cy: f64, color: vello::peniko::Col
     }
 }
 
-/// Just the "i" glyph — the circular outline comes from the button
-/// container itself now, not this icon, so it isn't drawn twice.
-fn draw_info_icon(
-    scene: &mut Scene,
-    text: &mut TextCx,
-    cx: f64,
-    cy: f64,
-    color: vello::peniko::Color,
-) {
-    let w = text.measure("i", 11.0, None);
-    text.draw_centered_v(
-        scene,
-        "i",
-        11.0,
-        None,
+/// A self-contained circled-"i" glyph (its own ring, plus a dot and a
+/// rounded stem inside it) — like the SF Symbol `info.circle`, not a bare
+/// dot-and-stem relying on the button container's own ring for the circle
+/// part. Sized smaller than the button itself so the two rings read as
+/// "icon sitting inside a button," not one ring doing double duty.
+fn draw_info_icon(scene: &mut Scene, cx: f64, cy: f64, color: vello::peniko::Color) {
+    let ring_r = 9.0;
+    scene.stroke(
+        &Stroke::new(1.3),
+        Affine::IDENTITY,
         color,
-        cx - w / 2.0,
-        cy - 7.0,
-        cy + 7.0,
+        None,
+        &Circle::new(Point::new(cx, cy), ring_r),
+    );
+
+    let dot_r = 1.5;
+    let stem_w = 2.2;
+    let stem_h = 7.4;
+    let gap = 1.6;
+    let total_h = dot_r * 2.0 + gap + stem_h;
+    let top = cy - total_h / 2.0;
+
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        color,
+        None,
+        &Circle::new(Point::new(cx, top + dot_r), dot_r),
+    );
+    let stem_top = top + dot_r * 2.0 + gap;
+    fill_rect(
+        scene,
+        Rect::new(cx - stem_w / 2.0, stem_top, cx + stem_w / 2.0, stem_top + stem_h),
+        color,
+        stem_w / 2.0,
     );
 }
 
@@ -186,13 +321,9 @@ fn draw_preview_icon(scene: &mut Scene, cx: f64, cy: f64, color: vello::peniko::
 
 /// x-extent of the main content area (grid/list), after the sidebar and
 /// the detail panel (when a font is selected) claim their strips.
-fn content_x_range(width: f64, detail_open: bool) -> (f64, f64) {
+fn content_x_range(width: f64, detail_open: bool, detail_w: f64) -> (f64, f64) {
     let x0 = theme::SIDEBAR_W + theme::FRAME_PAD;
-    let x1 = if detail_open {
-        width - theme::DETAIL_W
-    } else {
-        width
-    };
+    let x1 = if detail_open { width - detail_w } else { width };
     (x0, x1.max(x0))
 }
 
@@ -205,23 +336,29 @@ pub fn draw(app: &mut App, text: &mut TextCx, width: f64, height: f64) -> Scene 
     fill_rect(
         &mut scene,
         Rect::new(0.0, 0.0, width, height),
-        theme::CANVAS,
+        theme::CANVAS(),
         0.0,
     );
 
     sidebar::draw(app, text, &mut scene, height);
 
     let detail_open = app.detail_open && app.selected.is_some();
-    let (content_x0, content_x1) = content_x_range(width, detail_open);
+    app.detail_w = app.detail_w.clamp(theme::DETAIL_W, app.max_detail_w(width));
+    let (content_x0, content_x1) = content_x_range(width, detail_open, app.detail_w);
 
-    draw_toolbar(app, text, &mut scene, content_x0, content_x1);
+    // Full window width, not just the grid/list portion — otherwise a
+    // wide detail panel (see `App::detail_w`) squeezes the toolbar's own
+    // controls (the search field especially) into whatever's left, to the
+    // point they'd start overlapping each other. The detail panel sits
+    // *below* this shared toolbar (`content_y0`), not beside it.
+    draw_toolbar(app, text, &mut scene, content_x0, width);
 
     let content_y0 = theme::TOOLBAR_H;
     match app.view_mode {
         ViewMode::Grid => grid::draw_grid(
             app, text, &mut scene, content_x0, content_x1, content_y0, height,
         ),
-        ViewMode::List => grid::draw_list(
+        ViewMode::List => list::draw_list(
             app, text, &mut scene, content_x0, content_x1, content_y0, height,
         ),
     }
@@ -231,8 +368,9 @@ pub fn draw(app: &mut App, text: &mut TextCx, width: f64, height: f64) -> Scene 
             app,
             text,
             &mut scene,
-            width - theme::DETAIL_W,
+            width - app.detail_w,
             width,
+            content_y0,
             height,
         );
     }
@@ -241,7 +379,42 @@ pub fn draw(app: &mut App, text: &mut TextCx, width: f64, height: f64) -> Scene 
         draw_sample_picker(app, text, &mut scene, width, height);
     }
 
+    // A file is being dragged over the window but not yet dropped —
+    // distinct from `drop_flash_until` below, which only starts once
+    // `WindowEvent::DroppedFile` actually fires.
+    if app.drag_hovering {
+        let progress = app
+            .drag_hover_since
+            .map(|since| since.elapsed().as_secs_f64() / DRAG_HOVER_FAN_SECS)
+            .unwrap_or(1.0);
+        draw_drag_hover(text, &mut scene, content_x0, content_x1, content_y0, height, progress);
+    }
+
+    // The flash is the "animation to signify they're adding a font";
+    // once it expires the library picker takes over — one dropped file
+    // drives both in sequence, no separate state machine needed.
+    if let Some(flash_until) = app.drop_flash_until {
+        if std::time::Instant::now() < flash_until {
+            draw_drop_flash(&mut scene, text, width, height);
+        } else {
+            app.drop_flash_until = None;
+        }
+    }
+    if app.drop_flash_until.is_none() && app.pending_drop.is_some() {
+        draw_drop_picker(app, text, &mut scene, width, height);
+    }
+
     draw_context_menu(app, text, &mut scene);
+
+    if app.settings_open {
+        settings::draw(app, text, &mut scene, width, height);
+    }
+
+    // Drawn last: a real file delete is the one truly irreversible action
+    // in this app, so its confirmation sits above every other overlay.
+    if app.confirm_delete.is_some() {
+        draw_delete_confirm(app, text, &mut scene, width, height);
+    }
 
     scene
 }
@@ -257,14 +430,14 @@ fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
     let y0 = height - 24.0 - card_h;
     let card = Rect::new(x0, y0, x0 + card_w, y0 + card_h);
 
-    fill_rect(scene, card, theme::SIDEBAR_BG, 18.0);
-    stroke_rect(scene, card, theme::CONTROL_BORDER, 18.0, 1.0);
+    fill_rect(scene, card, theme::SIDEBAR_BG(), 18.0);
+    stroke_rect(scene, card, theme::CONTROL_BORDER(), 18.0, 1.0);
 
     // The sample text itself — an editable field, not just a display, so
     // typing here directly changes what every tile previews live.
     let field_rect = Rect::new(card.x0 + 16.0, card.y0 + 10.0, card.x1 - 40.0, card.y0 + 46.0);
     if app.focus == Focus::SampleText {
-        stroke_rect(scene, field_rect.inset(4.0), theme::CONTROL_FOCUS, 8.0, 1.5);
+        stroke_rect(scene, field_rect.inset(4.0), theme::CONTROL_FOCUS(), 8.0, 1.5);
     }
     let is_placeholder = app.sample_text.trim().is_empty();
     let display_text = app.effective_sample_text().to_string();
@@ -273,7 +446,7 @@ fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
         &display_text,
         26.0,
         None,
-        if is_placeholder { theme::TEXT_TERTIARY } else { theme::TEXT },
+        if is_placeholder { theme::TEXT_TERTIARY() } else { theme::TEXT() },
         field_rect.x0,
         field_rect.y0,
         field_rect.y1,
@@ -283,7 +456,7 @@ fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,
-            theme::ACCENT,
+            theme::BRAND_ACCENT(),
             None,
             &Rect::new(caret_x, field_rect.y0 + 3.0, caret_x + 2.0, field_rect.y1 - 3.0),
         );
@@ -302,7 +475,7 @@ fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
     scene.stroke(
         &Stroke::new(1.4),
         Affine::IDENTITY,
-        if close_hovered { theme::TEXT } else { theme::TEXT_TERTIARY },
+        if close_hovered { theme::TEXT() } else { theme::TEXT_TERTIARY() },
         None,
         &Circle::new(close_rect.center(), 9.0),
     );
@@ -315,7 +488,7 @@ fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
     scene.stroke(
         &Stroke::new(1.4),
         Affine::IDENTITY,
-        if close_hovered { theme::TEXT } else { theme::TEXT_TERTIARY },
+        if close_hovered { theme::TEXT() } else { theme::TEXT_TERTIARY() },
         None,
         &cross,
     );
@@ -335,11 +508,11 @@ fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
         let active = app.sample_text == label;
         let hovered = r.contains(app.hover);
         let bg = if active {
-            theme::NAV_SELECTED_BG
+            theme::NAV_SELECTED_BG()
         } else if hovered {
-            theme::CONTROL_HOVER_SUBTLE
+            theme::CONTROL_HOVER_SUBTLE()
         } else {
-            theme::CONTROL_BG
+            theme::CONTROL_BG()
         };
         fill_rect(scene, r, bg, chip_h / 2.0);
         let tw = text.measure(label, 12.5, None);
@@ -348,7 +521,7 @@ fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
             label,
             12.5,
             None,
-            if active { theme::TEXT } else { theme::TEXT_SECONDARY },
+            if active { theme::TEXT() } else { theme::TEXT_SECONDARY() },
             r.x0 + (w - tw) / 2.0,
             r.y0,
             r.y1,
@@ -358,6 +531,285 @@ fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
             action: HitAction::SetSampleText(label.to_string()),
         });
         cx += w + 8.0;
+    }
+}
+
+/// How long the cards take to fan out (and the glow to ease in) once a
+/// drag-hover starts — see `draw_drag_hover`'s `progress` parameter.
+/// `main.rs`'s `about_to_wait` also reads this to know how long to keep
+/// forcing redraws for.
+pub const DRAG_HOVER_FAN_SECS: f64 = 0.28;
+
+/// Shown for as long as a file is being dragged over the content area but
+/// hasn't been dropped yet (`WindowEvent::HoveredFile`) — a dashed brand-
+/// lime border plus the `.otf`/`.ttf` file-card motif from
+/// `branding/SVG/otf.svg`+`ttf.svg`, animating from stacked-and-square to
+/// fanned like a dealt hand of cards. `progress` is `0.0` the instant the
+/// hover starts, `1.0` once fully settled — see `App::drag_hover_since`.
+fn draw_drag_hover(
+    text: &mut TextCx,
+    scene: &mut Scene,
+    x0: f64,
+    x1: f64,
+    y0: f64,
+    height: f64,
+    progress: f64,
+) {
+    // Ease-out cubic: fast start, settles gently rather than snapping.
+    let eased = 1.0 - (1.0 - progress.clamp(0.0, 1.0)).powi(3);
+
+    let rect = Rect::new(x0 + 4.0, y0 + 4.0, x1 - 4.0, height - 4.0);
+    let dashed = Stroke::new(2.5).with_dashes(0.0, [9.0, 7.0]);
+    scene.stroke(&dashed, Affine::IDENTITY, theme::BRAND_ACCENT(), None, &rect.to_rounded_rect(14.0));
+
+    let cx = (x0 + x1) / 2.0;
+    let cy = y0 + (height - y0) / 2.0;
+
+    // A soft glow behind the cards: a few concentric, increasingly
+    // transparent lime circles rather than a true radial-gradient brush —
+    // simple, and plenty convincing for a brief hover overlay. Eases in
+    // alongside the cards rather than appearing instantly at full strength.
+    for (radius, alpha) in [(120.0, 0x0cu8), (85.0, 0x16), (55.0, 0x22)] {
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            vello::peniko::Color::from_rgba8(0x9a, 0xff, 0x00, (alpha as f64 * eased) as u8),
+            None,
+            &Circle::new(Point::new(cx, cy), radius),
+        );
+    }
+
+    let spread = 22.0 * eased;
+    let angle = 8.0 * eased;
+    crate::branding::draw_otf_card(scene, Point::new(cx - spread, cy), 92.0, -angle, theme::CANVAS());
+    crate::branding::draw_ttf_card(scene, Point::new(cx + spread, cy), 92.0, angle, theme::CANVAS());
+
+    let caption = "Drop to add a font";
+    let tw = text.measure(caption, 14.0, None);
+    text.draw(scene, caption, 14.0, None, theme::TEXT_SECONDARY(), cx - tw / 2.0, cy + 80.0);
+}
+
+fn draw_drop_flash(scene: &mut Scene, text: &mut TextCx, width: f64, height: f64) {
+    fill_rect(
+        scene,
+        Rect::new(0.0, 0.0, width, height),
+        vello::peniko::Color::from_rgba8(0x9a, 0xff, 0x00, 0x20),
+        0.0,
+    );
+    let msg = "Adding font\u{2026}";
+    let size = 18.0;
+    let tw = text.measure(msg, size, None);
+    let pill_w = tw + 40.0;
+    let pill_h = 44.0;
+    let x0 = (width - pill_w) / 2.0;
+    let y0 = (height - pill_h) / 2.0;
+    let pill = Rect::new(x0, y0, x0 + pill_w, y0 + pill_h);
+    fill_rect(scene, pill, theme::SIDEBAR_BG(), pill_h / 2.0);
+    stroke_rect(scene, pill, theme::CONTROL_BORDER(), pill_h / 2.0, 1.0);
+    text.draw_centered_v(scene, msg, size, None, theme::TEXT(), pill.x0 + 20.0, pill.y0, pill.y1);
+}
+
+/// A modal (dims the rest of the window, unlike the non-modal sample-text
+/// dock) since a dropped file genuinely needs a decision — which library,
+/// or cancel — before anything else makes sense to interact with.
+fn draw_drop_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: f64, height: f64) {
+    let Some(dropped) = app.pending_drop.clone() else {
+        return;
+    };
+    let file_name = dropped
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "font file".to_string());
+
+    let row_h = 40.0;
+    let header_h = 56.0;
+    let footer_h = 46.0;
+    let folders: Vec<(i64, String)> = app.folders.iter().map(|f| (f.id, f.path.clone())).collect();
+    let list_h = row_h * folders.len().max(1) as f64;
+    let card_w = 380.0;
+    let card_h = header_h + list_h + footer_h;
+    let x0 = (width - card_w) / 2.0;
+    let y0 = (height - card_h) / 2.0;
+    let card = Rect::new(x0, y0, x0 + card_w, y0 + card_h);
+
+    fill_rect(
+        scene,
+        Rect::new(0.0, 0.0, width, height),
+        vello::peniko::Color::from_rgba8(0x00, 0x00, 0x00, 0x66),
+        0.0,
+    );
+    fill_rect(scene, card, theme::SIDEBAR_BG(), 16.0);
+    stroke_rect(scene, card, theme::CONTROL_BORDER(), 16.0, 1.0);
+
+    text.draw(scene, "Add to which library?", 15.0, None, theme::TEXT(), card.x0 + 20.0, card.y0 + 26.0);
+    text.draw(scene, &file_name, 11.5, None, theme::TEXT_SECONDARY(), card.x0 + 20.0, card.y0 + 44.0);
+
+    if folders.is_empty() {
+        text.draw(
+            scene,
+            "No libraries yet \u{2014} add one first.",
+            12.5,
+            None,
+            theme::TEXT_TERTIARY(),
+            card.x0 + 20.0,
+            card.y0 + header_h + 24.0,
+        );
+    }
+
+    for (i, (folder_id, path)) in folders.into_iter().enumerate() {
+        let ry = card.y0 + header_h + row_h * i as f64;
+        let row = Rect::new(card.x0 + 8.0, ry, card.x1 - 8.0, ry + row_h);
+        if row.contains(app.hover) {
+            fill_rect(scene, row, theme::NAV_HOVER_BG(), 8.0);
+        }
+        let name = path.rsplit(['/', '\\']).find(|s| !s.is_empty()).unwrap_or(&path);
+        text.draw_centered_v(scene, name, 13.0, None, theme::TEXT(), row.x0 + 12.0, row.y0, row.y1);
+        app.hit_regions.push(HitRegion {
+            rect: row,
+            action: HitAction::AssignDrop(folder_id),
+        });
+    }
+
+    let footer_y = card.y0 + header_h + list_h;
+    let cancel_rect = Rect::new(card.x0 + 20.0, footer_y + 8.0, card.x1 - 20.0, footer_y + footer_h - 8.0);
+    let cancel_hovered = cancel_rect.contains(app.hover);
+    fill_rect(
+        scene,
+        cancel_rect,
+        if cancel_hovered { theme::CONTROL_HOVER_SUBTLE() } else { theme::CONTROL_BG() },
+        8.0,
+    );
+    let cancel_label = "Cancel";
+    let tw = text.measure(cancel_label, 12.5, None);
+    text.draw_centered_v(
+        scene,
+        cancel_label,
+        12.5,
+        None,
+        theme::TEXT_SECONDARY(),
+        cancel_rect.x0 + (cancel_rect.width() - tw) / 2.0,
+        cancel_rect.y0,
+        cancel_rect.y1,
+    );
+    app.hit_regions.push(HitRegion {
+        rect: cancel_rect,
+        action: HitAction::CancelDrop,
+    });
+}
+
+/// Font ▸ Delete from Library's confirmation — a real, unrecoverable file
+/// delete that (since a library folder is typically a team's externally
+/// synced Dropbox/Drive/OneDrive/iCloud/SMB folder, not something GlyphClub
+/// owns) can propagate to everyone else's synced copy too, so it always
+/// stops for a confirmation here rather than deleting on the menu click
+/// alone.
+fn draw_delete_confirm(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: f64, height: f64) {
+    let Some(id) = app.confirm_delete else {
+        return;
+    };
+    let family = app.entry(id).map(|e| e.family.clone()).unwrap_or_else(|| "this font".to_string());
+
+    let card_w = 360.0;
+    let card_h = 172.0;
+    let x0 = (width - card_w) / 2.0;
+    let y0 = (height - card_h) / 2.0;
+    let card = Rect::new(x0, y0, x0 + card_w, y0 + card_h);
+
+    fill_rect(
+        scene,
+        Rect::new(0.0, 0.0, width, height),
+        vello::peniko::Color::from_rgba8(0x00, 0x00, 0x00, 0x66),
+        0.0,
+    );
+    fill_rect(scene, card, theme::SIDEBAR_BG(), 16.0);
+    stroke_rect(scene, card, theme::CONTROL_BORDER(), 16.0, 1.0);
+
+    text.draw(scene, "Delete from Library?", 15.0, None, theme::TEXT(), card.x0 + 20.0, card.y0 + 30.0);
+    let body = format!(
+        "\u{201c}{family}\u{201d} will be permanently deleted from disk \u{2014} including everyone else\u{2019}s synced copy, if this library is shared. This can\u{2019}t be undone."
+    );
+    draw_wrapped_line(text, scene, &body, card.x0 + 20.0, card.y0 + 54.0, card_w - 40.0, theme::TEXT_SECONDARY());
+
+    let btn_h = 38.0;
+    let btn_y = card.y1 - 20.0 - btn_h;
+    let cancel_rect = Rect::new(card.x0 + 20.0, btn_y, card.x0 + card_w / 2.0 - 6.0, btn_y + btn_h);
+    let delete_rect = Rect::new(card.x0 + card_w / 2.0 + 6.0, btn_y, card.x1 - 20.0, btn_y + btn_h);
+
+    let cancel_hovered = cancel_rect.contains(app.hover);
+    fill_rect(
+        scene,
+        cancel_rect,
+        if cancel_hovered { theme::CONTROL_HOVER_SUBTLE() } else { theme::CONTROL_BG() },
+        8.0,
+    );
+    let cancel_label = "Cancel";
+    let ctw = text.measure(cancel_label, 12.5, None);
+    text.draw_centered_v(
+        scene,
+        cancel_label,
+        12.5,
+        None,
+        theme::TEXT_SECONDARY(),
+        cancel_rect.x0 + (cancel_rect.width() - ctw) / 2.0,
+        cancel_rect.y0,
+        cancel_rect.y1,
+    );
+    app.hit_regions.push(HitRegion {
+        rect: cancel_rect,
+        action: HitAction::CancelDelete,
+    });
+
+    let delete_hovered = delete_rect.contains(app.hover);
+    fill_rect(scene, delete_rect, theme::DANGER(), 8.0);
+    if delete_hovered {
+        stroke_rect(scene, delete_rect, theme::TEXT(), 8.0, 1.0);
+    }
+    let delete_label = "Delete";
+    let dtw = text.measure(delete_label, 12.5, None);
+    text.draw_centered_v(
+        scene,
+        delete_label,
+        12.5,
+        None,
+        theme::TEXT(),
+        delete_rect.x0 + (delete_rect.width() - dtw) / 2.0,
+        delete_rect.y0,
+        delete_rect.y1,
+    );
+    app.hit_regions.push(HitRegion {
+        rect: delete_rect,
+        action: HitAction::ConfirmDelete(id),
+    });
+}
+
+/// Naive word-wrap for the one multi-line body string this file needs
+/// (the delete confirmation's warning) — breaks on word boundaries at
+/// `max_w`, no hyphenation, good enough for a couple of short lines.
+fn draw_wrapped_line(
+    text: &mut TextCx,
+    scene: &mut Scene,
+    body: &str,
+    x: f64,
+    y0: f64,
+    max_w: f64,
+    color: vello::peniko::Color,
+) {
+    let size = 12.5;
+    let line_h = 18.0;
+    let mut line = String::new();
+    let mut y = y0;
+    for word in body.split_whitespace() {
+        let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+        if text.measure(&candidate, size, None) > max_w && !line.is_empty() {
+            text.draw(scene, &line, size as f32, None, color, x, y);
+            y += line_h;
+            line = word.to_string();
+        } else {
+            line = candidate;
+        }
+    }
+    if !line.is_empty() {
+        text.draw(scene, &line, size as f32, None, color, x, y);
     }
 }
 
@@ -381,8 +833,8 @@ fn draw_context_menu(app: &mut App, text: &mut TextCx, scene: &mut Scene) {
         anchor.y + item_h * items.len() as f64 + 8.0,
     );
 
-    fill_rect(scene, panel, theme::SIDEBAR_BG, 8.0);
-    stroke_rect(scene, panel, theme::CONTROL_BORDER, 8.0, 1.0);
+    fill_rect(scene, panel, theme::SIDEBAR_BG(), 8.0);
+    stroke_rect(scene, panel, theme::CONTROL_BORDER(), 8.0, 1.0);
 
     for (i, (label, action)) in items.into_iter().enumerate() {
         let item_rect = Rect::new(
@@ -396,7 +848,7 @@ fn draw_context_menu(app: &mut App, text: &mut TextCx, scene: &mut Scene) {
             label,
             12.5,
             None,
-            theme::TEXT,
+            theme::TEXT(),
             item_rect.x0 + 10.0,
             item_rect.y0 + 19.0,
         );
@@ -415,13 +867,13 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
     fill_rect(
         scene,
         Rect::new(x0, 0.0, x1, theme::TOOLBAR_H),
-        theme::TOOLBAR_BG,
+        theme::TOOLBAR_BG(),
         0.0,
     );
     scene.fill(
         Fill::NonZero,
         Affine::IDENTITY,
-        theme::SEPARATOR,
+        theme::SEPARATOR(),
         None,
         &Rect::new(x0, theme::TOOLBAR_H - 1.0, x1, theme::TOOLBAR_H),
     );
@@ -434,13 +886,13 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
     // Rescan.
     let rescan_rect = Rect::new(cx, ctrl_y, cx + ctrl_h, ctrl_y + ctrl_h);
     let rescan_bg = if rescan_rect.contains(app.hover) {
-        theme::CONTROL_HOVER_SUBTLE
+        theme::CONTROL_HOVER_SUBTLE()
     } else {
-        theme::CONTROL_BG
+        theme::CONTROL_BG()
     };
     fill_rect(scene, rescan_rect, rescan_bg, ctrl_h / 2.0);
-    stroke_rect(scene, rescan_rect, theme::CONTROL_BORDER, ctrl_h / 2.0, 1.0);
-    draw_refresh_icon(scene, rescan_rect.center(), theme::TEXT_SECONDARY);
+    stroke_rect(scene, rescan_rect, theme::CONTROL_BORDER(), ctrl_h / 2.0, 1.0);
+    draw_refresh_icon(scene, rescan_rect.center(), theme::TEXT_SECONDARY());
     app.hit_regions.push(HitRegion {
         rect: rescan_rect,
         action: HitAction::Rescan,
@@ -452,15 +904,15 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
     {
         let slider_w = 116.0;
         let slider_rect = Rect::new(cx, ctrl_y - 2.0, cx + slider_w, ctrl_y + ctrl_h + 2.0);
-        fill_rect(scene, slider_rect, theme::CONTROL_BG, 18.0);
-        stroke_rect(scene, slider_rect, theme::CONTROL_BORDER, 18.0, 1.0);
+        fill_rect(scene, slider_rect, theme::CONTROL_BG(), 18.0);
+        stroke_rect(scene, slider_rect, theme::CONTROL_BORDER(), 18.0, 1.0);
 
         text.draw_centered_v(
             scene,
             "A",
             10.0,
             None,
-            theme::TEXT_TERTIARY,
+            theme::TEXT_TERTIARY(),
             cx + 10.0,
             ctrl_y,
             ctrl_y + ctrl_h,
@@ -470,7 +922,7 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
             "A",
             14.0,
             None,
-            theme::TEXT_SECONDARY,
+            theme::TEXT_SECONDARY(),
             cx + slider_w - 20.0,
             ctrl_y,
             ctrl_y + ctrl_h,
@@ -484,7 +936,7 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
         scene.stroke(
             &Stroke::new(3.0),
             Affine::IDENTITY,
-            theme::TEXT_TERTIARY,
+            theme::TEXT_TERTIARY(),
             None,
             &Line::new((track_x0, track_y), (track_x1, track_y)),
         );
@@ -493,21 +945,21 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
         scene.stroke(
             &Stroke::new(3.0),
             Affine::IDENTITY,
-            theme::ACCENT,
+            theme::BRAND_ACCENT(),
             None,
             &Line::new((track_x0, track_y), (thumb_x, track_y)),
         );
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,
-            theme::TEXT,
+            theme::TEXT(),
             None,
             &Circle::new(Point::new(thumb_x, track_y), 6.0),
         );
         stroke_rect(
             scene,
             Rect::new(thumb_x - 6.0, track_y - 6.0, thumb_x + 6.0, track_y + 6.0),
-            theme::CONTROL_BORDER,
+            theme::CONTROL_BORDER(),
             6.0,
             1.0,
         );
@@ -518,8 +970,6 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
         });
         cx += slider_w + 14.0;
     }
-
-    let _ = cx;
 
     // Search field, right-aligned.
     let search_w = 236.0;
@@ -532,23 +982,31 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
     let cluster_w = ctrl_h + 12.0 + seg_w * 2.0 + 12.0 + ctrl_h;
     let mut ccx = search_rect.x0 - pad - cluster_w;
 
+    // Windows only: macOS gets a real `NSMenu` (see `native_menu.rs`)
+    // instead, so this fills what would otherwise be dead space between
+    // the tile-size slider and the preview/view/info cluster.
+    #[cfg(target_os = "windows")]
+    draw_windows_menu_bar(app, text, scene, cx, ccx - pad, ctrl_y, ctrl_h);
+    #[cfg(not(target_os = "windows"))]
+    let _ = cx;
+
     // Preview toggle — opens the sample-text picker card (`draw_sample_picker`).
     let preview_rect = Rect::new(ccx, ctrl_y, ccx + ctrl_h, ctrl_y + ctrl_h);
     let preview_active = app.sample_picker_open;
     if preview_active {
-        fill_rect(scene, preview_rect, theme::CONTROL_BG_HOVER, ctrl_h / 2.0);
+        fill_rect(scene, preview_rect, theme::CONTROL_BG_HOVER(), ctrl_h / 2.0);
     } else if preview_rect.contains(app.hover) {
         fill_rect(
             scene,
             preview_rect,
-            theme::CONTROL_HOVER_SUBTLE,
+            theme::CONTROL_HOVER_SUBTLE(),
             ctrl_h / 2.0,
         );
     }
     stroke_rect(
         scene,
         preview_rect,
-        theme::CONTROL_BORDER,
+        theme::CONTROL_BORDER(),
         ctrl_h / 2.0,
         1.0,
     );
@@ -556,7 +1014,7 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
         scene,
         preview_rect.x0 + ctrl_h / 2.0,
         preview_rect.y0 + ctrl_h / 2.0,
-        if preview_active { theme::TEXT } else { theme::TEXT_SECONDARY },
+        if preview_active { theme::TEXT() } else { theme::TEXT_SECONDARY() },
     );
     app.hit_regions.push(HitRegion {
         rect: preview_rect,
@@ -567,8 +1025,8 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
     // Grid / List — paired together in one pill, since they're the same
     // choice (view mode), unlike the standalone buttons on either side.
     let seg_track = Rect::new(ccx, ctrl_y, ccx + seg_w * 2.0, ctrl_y + ctrl_h);
-    fill_rect(scene, seg_track, theme::CONTROL_BG, ctrl_h / 2.0);
-    stroke_rect(scene, seg_track, theme::CONTROL_BORDER, ctrl_h / 2.0, 1.0);
+    fill_rect(scene, seg_track, theme::CONTROL_BG(), ctrl_h / 2.0);
+    stroke_rect(scene, seg_track, theme::CONTROL_BORDER(), ctrl_h / 2.0, 1.0);
     for (i, mode) in [ViewMode::Grid, ViewMode::List].into_iter().enumerate() {
         let r = Rect::new(
             ccx + seg_w * i as f64,
@@ -578,19 +1036,19 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
         );
         let active = app.view_mode == mode;
         if active {
-            fill_rect(scene, r.inset(-2.0), theme::CONTROL_BG_HOVER, seg_w / 2.0);
+            fill_rect(scene, r.inset(-2.0), theme::CONTROL_BG_HOVER(), seg_w / 2.0);
         } else if r.contains(app.hover) {
             fill_rect(
                 scene,
                 r.inset(-1.0),
-                theme::CONTROL_HOVER_SUBTLE,
+                theme::CONTROL_HOVER_SUBTLE(),
                 seg_w / 2.0,
             );
         }
         let icon_color = if active {
-            theme::TEXT
+            theme::TEXT()
         } else {
-            theme::TEXT_SECONDARY
+            theme::TEXT_SECONDARY()
         };
         let (icon_cx, icon_cy) = (r.x0 + seg_w / 2.0, ctrl_y + ctrl_h / 2.0);
         match mode {
@@ -609,20 +1067,19 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
     let info_rect = Rect::new(ccx, ctrl_y, ccx + ctrl_h, ctrl_y + ctrl_h);
     let info_active = app.detail_open;
     if info_active {
-        fill_rect(scene, info_rect, theme::CONTROL_BG_HOVER, ctrl_h / 2.0);
+        fill_rect(scene, info_rect, theme::CONTROL_BG_HOVER(), ctrl_h / 2.0);
     } else if info_rect.contains(app.hover) {
-        fill_rect(scene, info_rect, theme::CONTROL_HOVER_SUBTLE, ctrl_h / 2.0);
+        fill_rect(scene, info_rect, theme::CONTROL_HOVER_SUBTLE(), ctrl_h / 2.0);
     }
-    stroke_rect(scene, info_rect, theme::CONTROL_BORDER, ctrl_h / 2.0, 1.0);
+    stroke_rect(scene, info_rect, theme::CONTROL_BORDER(), ctrl_h / 2.0, 1.0);
     draw_info_icon(
         scene,
-        text,
         info_rect.x0 + ctrl_h / 2.0,
         info_rect.y0 + ctrl_h / 2.0,
         if info_active {
-            theme::TEXT
+            theme::TEXT()
         } else {
-            theme::TEXT_SECONDARY
+            theme::TEXT_SECONDARY()
         },
     );
     app.hit_regions.push(HitRegion {
@@ -630,15 +1087,15 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
         action: HitAction::ToggleDetailPanel,
     });
     let search_radius = ctrl_h / 2.0;
-    fill_rect(scene, search_rect, theme::CONTROL_BG, search_radius);
+    fill_rect(scene, search_rect, theme::CONTROL_BG(), search_radius);
     let is_focused = app.focus == Focus::Search;
     stroke_rect(
         scene,
         search_rect,
         if is_focused {
-            theme::CONTROL_FOCUS
+            theme::CONTROL_FOCUS()
         } else {
-            theme::CONTROL_BORDER
+            theme::CONTROL_BORDER()
         },
         search_radius,
         if is_focused { 1.5 } else { 1.0 },
@@ -647,7 +1104,7 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
         scene,
         search_rect.x0 + 11.0,
         ctrl_y + 9.0,
-        theme::TEXT_TERTIARY,
+        theme::TEXT_TERTIARY(),
     );
     let text_x = search_rect.x0 + 34.0;
     // `TextCx::draw` receives an origin, not a UIKit-style visual baseline.
@@ -667,18 +1124,18 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
             "Search family\u{2026}",
             13.0,
             None,
-            theme::TEXT_TERTIARY,
+            theme::TEXT_TERTIARY(),
             text_x,
             text_y,
         );
     } else {
-        text.draw(scene, &app.search, 13.0, None, theme::TEXT, text_x, text_y);
+        text.draw(scene, &app.search, 13.0, None, theme::TEXT(), text_x, text_y);
         if app.focus == Focus::Search {
             let caret_x = text_x + text.measure(&app.search, 13.0, None);
             scene.fill(
                 Fill::NonZero,
                 Affine::IDENTITY,
-                theme::ACCENT,
+                theme::BRAND_ACCENT(),
                 None,
                 &Rect::new(
                     caret_x + 1.0,
@@ -696,15 +1153,218 @@ fn draw_toolbar(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1
     });
 }
 
+/// The hand-rolled Windows menu bar — macOS gets a real `NSMenu` (see
+/// `native_menu.rs`) driven by `muda`; Windows has its own plan (this),
+/// drawn as an ordinary part of the toolbar rather than native window
+/// chrome. Every real item routes through the same `ui::` functions the
+/// macOS menu calls, so the two never drift into different behavior for
+/// what's supposed to be the same command.
+#[cfg(target_os = "windows")]
+fn draw_windows_menu_bar(
+    app: &mut App,
+    text: &mut TextCx,
+    scene: &mut Scene,
+    x0: f64,
+    x1: f64,
+    ctrl_y: f64,
+    ctrl_h: f64,
+) {
+    use crate::app::WinMenuKind;
+
+    let labels = [
+        (WinMenuKind::File, "File"),
+        (WinMenuKind::View, "View"),
+        (WinMenuKind::Font, "Font"),
+        (WinMenuKind::Help, "Help"),
+    ];
+
+    app.win_menu_bar_rects.clear();
+    let mut cx = x0;
+    for (kind, label) in labels {
+        let w = text.measure(label, 13.0, None) + 24.0;
+        if cx + w > x1 {
+            break;
+        }
+        let rect = Rect::new(cx, ctrl_y, cx + w, ctrl_y + ctrl_h);
+        let open = app.open_win_menu == Some(kind);
+        if open || rect.contains(app.hover) {
+            fill_rect(scene, rect, theme::CONTROL_BG(), 8.0);
+        }
+        let tw = text.measure(label, 13.0, None);
+        text.draw_centered_v(
+            scene,
+            label,
+            13.0,
+            None,
+            if open { theme::TEXT() } else { theme::TEXT_SECONDARY() },
+            rect.x0 + (rect.width() - tw) / 2.0,
+            rect.y0,
+            rect.y1,
+        );
+        app.win_menu_bar_rects.push((kind, rect));
+        app.hit_regions.push(HitRegion {
+            rect,
+            action: HitAction::OpenWinMenu(kind),
+        });
+        cx += w;
+    }
+
+    let Some(kind) = app.open_win_menu else {
+        app.win_menu_panel_rect = Rect::ZERO;
+        return;
+    };
+    let Some(&(_, anchor)) = app.win_menu_bar_rects.iter().find(|(k, _)| *k == kind) else {
+        return;
+    };
+
+    let selected_font = app.selected.and_then(|id| app.entry(id));
+    let is_system_selected = selected_font.map(|e| e.is_system).unwrap_or(false);
+    let has_selection = selected_font.is_some();
+    let is_active = app.selected.map(|id| app.active_ids.contains(&id)).unwrap_or(false);
+
+    // A separator is `(None, true, None)`; a real item names its label,
+    // whether it's currently enabled, and the action a click on it runs.
+    // Checkmark state for the two View items comes from `app.view_mode`
+    // directly rather than being threaded through here.
+    let sep = (None, true, None);
+    let items: Vec<(Option<&str>, bool, Option<HitAction>)> = match kind {
+        WinMenuKind::File => vec![
+            (Some("Add Library\u{2026}"), true, Some(HitAction::AddFolder)),
+            (Some("Sync Now"), true, Some(HitAction::Rescan)),
+            sep,
+            (Some("Settings\u{2026}"), true, Some(HitAction::OpenSettings)),
+        ],
+        WinMenuKind::View => vec![
+            (Some("as Grid"), true, Some(HitAction::SetViewMode(ViewMode::Grid))),
+            (Some("as List"), true, Some(HitAction::SetViewMode(ViewMode::List))),
+            sep,
+            (Some("Show Font Info"), true, Some(HitAction::ToggleDetailPanel)),
+            sep,
+            (Some("Zoom In"), true, Some(HitAction::ZoomIn)),
+            (Some("Zoom Out"), true, Some(HitAction::ZoomOut)),
+        ],
+        WinMenuKind::Font => vec![
+            (
+                Some("Activate"),
+                has_selection && !is_system_selected && !is_active,
+                Some(HitAction::ActivateSelected),
+            ),
+            (
+                Some("Activate Temporarily"),
+                has_selection && !is_system_selected && !is_active,
+                Some(HitAction::ActivateSelectedTemporarily),
+            ),
+            (
+                Some("Deactivate"),
+                has_selection && !is_system_selected && is_active,
+                Some(HitAction::DeactivateSelected),
+            ),
+            sep,
+            (Some("Mark Favorite"), has_selection, Some(HitAction::ToggleDetailFavorite)),
+            sep,
+            (Some("Export\u{2026}"), has_selection, Some(HitAction::ExportSelectedFont)),
+            (Some("Show in Explorer"), has_selection, Some(HitAction::RevealSelectedFont)),
+            sep,
+            (
+                Some("Remove from Fontlist"),
+                has_selection && !is_system_selected,
+                Some(HitAction::RemoveSelectedFromFontlist),
+            ),
+            (
+                Some("Delete from Library\u{2026}"),
+                has_selection && !is_system_selected,
+                Some(HitAction::RequestDeleteSelected),
+            ),
+        ],
+        WinMenuKind::Help => vec![(Some("GlyphClub on GitHub"), true, Some(HitAction::OpenGitHub))],
+    };
+
+    let row_h = 28.0;
+    let sep_h = 9.0;
+    let panel_w = 220.0;
+    let panel_h = 12.0
+        + items
+            .iter()
+            .map(|(label, ..)| if label.is_some() { row_h } else { sep_h })
+            .sum::<f64>();
+    let panel_x0 = anchor.x0.min(x1 - panel_w).max(x0);
+    let panel = Rect::new(panel_x0, anchor.y1 + 4.0, panel_x0 + panel_w, anchor.y1 + 4.0 + panel_h);
+    app.win_menu_panel_rect = panel;
+
+    fill_rect(scene, panel, theme::SIDEBAR_BG(), 10.0);
+    stroke_rect(scene, panel, theme::CONTROL_BORDER(), 10.0, 1.0);
+
+    let mut iy = panel.y0 + 6.0;
+    for (label, enabled, action) in items {
+        let (Some(label), Some(action)) = (label, action) else {
+            scene.stroke(
+                &Stroke::new(1.0),
+                Affine::IDENTITY,
+                theme::SEPARATOR(),
+                None,
+                &Line::new((panel.x0 + 10.0, iy + sep_h / 2.0), (panel.x1 - 10.0, iy + sep_h / 2.0)),
+            );
+            iy += sep_h;
+            continue;
+        };
+        let row = Rect::new(panel.x0 + 4.0, iy, panel.x1 - 4.0, iy + row_h);
+        if enabled && row.contains(app.hover) {
+            fill_rect(scene, row, theme::NAV_HOVER_BG(), 6.0);
+        }
+        let checked = (label == "as Grid" && app.view_mode == ViewMode::Grid)
+            || (label == "as List" && app.view_mode == ViewMode::List);
+        let label_x = row.x0 + if checked { 28.0 } else { 12.0 };
+        if checked {
+            text.draw_centered_v(scene, "\u{2713}", 12.0, None, theme::TEXT(), row.x0 + 12.0, row.y0, row.y1);
+        }
+        text.draw_centered_v(
+            scene,
+            label,
+            12.5,
+            None,
+            if enabled { theme::TEXT() } else { theme::TEXT_TERTIARY() },
+            label_x,
+            row.y0,
+            row.y1,
+        );
+        if enabled {
+            app.hit_regions.push(HitRegion { rect: row, action });
+        }
+        iy += row_h;
+    }
+}
+
 /// Dispatches a click at `point` against the regions the last [`draw`] call
 /// recorded (topmost-drawn first), then blurs any focused text field if
 /// nothing under the click claims focus for itself.
-pub fn handle_click(app: &mut App, point: Point) {
+///
+/// Returns whether the click landed on *something* this app cares about —
+/// a context/win-menu (open, closing, or a click inside one) or a real
+/// `HitRegion` — as opposed to genuinely empty background. `main.rs`'s
+/// `MouseInput` handler uses that to decide whether a click that starts a
+/// hold-and-drag should move the window instead (see
+/// `traffic_lights::disable_titlebar_drag`'s doc comment for why that
+/// can't be decided on the AppKit side alone).
+pub fn handle_click(app: &mut App, point: Point) -> bool {
     if let Some(menu) = &app.context_menu {
         let inside = menu.panel_rect.contains(point);
         app.context_menu = None;
         if !inside {
-            return;
+            return true;
+        }
+    }
+
+    // Same dismiss-on-outside-click pattern as the folder context menu,
+    // above — except a click on the menu bar itself (any label, not just
+    // the open one) falls through to the normal hit-region match below
+    // instead of being swallowed, so clicking a different top-level menu
+    // switches straight to it rather than needing two clicks.
+    if app.open_win_menu.is_some() {
+        let on_bar = app.win_menu_bar_rects.iter().any(|(_, r)| r.contains(point));
+        let inside_panel = app.win_menu_panel_rect.contains(point);
+        if !on_bar && !inside_panel {
+            app.open_win_menu = None;
+            return true;
         }
     }
 
@@ -717,7 +1377,7 @@ pub fn handle_click(app: &mut App, point: Point) {
 
     let Some(action) = hit else {
         app.focus = Focus::None;
-        return;
+        return false;
     };
 
     match action {
@@ -744,21 +1404,11 @@ pub fn handle_click(app: &mut App, point: Point) {
         }
         HitAction::AddFolder => {
             app.focus = Focus::None;
-            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                let path = dir.to_string_lossy().into_owned();
-                match app.catalog.add_folder(&path) {
-                    Ok(result) => app.reload_folders_and_fonts(result.status),
-                    Err(e) => app.status = e.to_string(),
-                }
-            }
+            add_library(app);
         }
         HitAction::Rescan => {
             app.focus = Focus::None;
-            app.status = "Scanning\u{2026}".to_string();
-            match app.catalog.rescan() {
-                Ok(result) => app.reload_folders_and_fonts(result.status),
-                Err(e) => app.status = e.to_string(),
-            }
+            sync_now(app);
         }
         HitAction::SetViewMode(mode) => {
             app.view_mode = *mode;
@@ -768,6 +1418,10 @@ pub fn handle_click(app: &mut App, point: Point) {
         HitAction::StartTileSizeDrag => {
             app.dragging_tile_size = true;
             update_tile_size_from_point(app, point);
+            app.focus = Focus::None;
+        }
+        HitAction::StartDetailResize => {
+            app.dragging_detail_resize = true;
             app.focus = Focus::None;
         }
         HitAction::StartScrollDrag => {
@@ -795,10 +1449,44 @@ pub fn handle_click(app: &mut App, point: Point) {
             app.sample_text.clear();
             app.focus = Focus::SampleText;
         }
+        HitAction::TogglePreviewPresetDropdown => {
+            app.preview_preset_open = !app.preview_preset_open;
+        }
+        HitAction::SetPendingPreviewPreset(preset) => {
+            app.pending_preview_preset = Some(*preset);
+            app.preview_preset_open = false;
+        }
+        HitAction::SetPreviewAlign(align) => {
+            app.preview_align = *align;
+        }
+        HitAction::TogglePreviewSizeDropdown => {
+            app.preview_size_dropdown_open = !app.preview_size_dropdown_open;
+        }
+        HitAction::SetPreviewSize(size) => {
+            app.preview_size = *size;
+            app.preview_size_input = (*size as i64).to_string();
+            app.preview_size_dropdown_open = false;
+        }
+        HitAction::AssignDrop(folder_id) => {
+            let folder_id = *folder_id;
+            app.focus = Focus::None;
+            if let Some(dropped) = app.pending_drop.take() {
+                assign_dropped_file(app, folder_id, &dropped);
+            }
+        }
+        HitAction::CancelDrop => {
+            app.pending_drop = None;
+            app.focus = Focus::None;
+        }
         HitAction::FocusField(f) => {
             app.focus = *f;
         }
         HitAction::SelectFont(id) => {
+            if app.selected != Some(*id) {
+                app.glyph_search.clear();
+                app.glyph_block_filter = None;
+                app.detail_tab_scroll_y = 0.0;
+            }
             app.selected = Some(*id);
             app.focus = Focus::None;
         }
@@ -824,11 +1512,200 @@ pub fn handle_click(app: &mut App, point: Point) {
                 toggle_favorite(app, id);
             }
         }
-        HitAction::CloseDetail => {
-            app.detail_open = false;
+        HitAction::PressColumnHeader(i) => {
+            app.header_press = Some((*i, point));
             app.focus = Focus::None;
         }
+        HitAction::StartColumnResize(i) => {
+            let width = app.list_columns[*i].width;
+            app.column_resize_start = Some((*i, point.x, width));
+            app.focus = Focus::None;
+        }
+        HitAction::ToggleFamilyExpanded(family) => {
+            if !app.expanded_families.remove(family) {
+                app.expanded_families.insert(family.clone());
+            }
+            app.focus = Focus::None;
+        }
+        HitAction::ConfirmDelete(id) => {
+            let id = *id;
+            app.confirm_delete = None;
+            match app.catalog.delete_font_file(id) {
+                Ok(()) => {
+                    if app.selected == Some(id) {
+                        app.selected = None;
+                    }
+                    app.reload_folders_and_fonts("Deleted".to_string());
+                }
+                Err(e) => app.status = e.to_string(),
+            }
+        }
+        HitAction::CancelDelete => {
+            app.confirm_delete = None;
+        }
+        HitAction::OpenWinMenu(kind) => {
+            app.open_win_menu = if app.open_win_menu == Some(*kind) { None } else { Some(*kind) };
+            app.focus = Focus::None;
+        }
+        HitAction::ActivateSelected => {
+            app.open_win_menu = None;
+            activate_selected(app);
+        }
+        HitAction::ActivateSelectedTemporarily => {
+            app.open_win_menu = None;
+            activate_selected_temporarily(app);
+        }
+        HitAction::DeactivateSelected => {
+            app.open_win_menu = None;
+            deactivate_selected(app);
+        }
+        HitAction::ExportSelectedFont => {
+            app.open_win_menu = None;
+            export_selected(app);
+        }
+        HitAction::RevealSelectedFont => {
+            app.open_win_menu = None;
+            reveal_selected(app);
+        }
+        HitAction::RemoveSelectedFromFontlist => {
+            app.open_win_menu = None;
+            remove_selected_from_fontlist(app);
+        }
+        HitAction::RequestDeleteSelected => {
+            app.open_win_menu = None;
+            request_delete_selected(app);
+        }
+        HitAction::ZoomIn => {
+            app.open_win_menu = None;
+            app.tile_size = (app.tile_size + 20.0).min(theme::MAX_TILE);
+        }
+        HitAction::ZoomOut => {
+            app.open_win_menu = None;
+            app.tile_size = (app.tile_size - 20.0).max(theme::MIN_TILE);
+        }
+        HitAction::OpenGitHub => {
+            app.open_win_menu = None;
+            open_github_repo();
+        }
+        HitAction::SetDetailTab(tab) => {
+            app.detail_tab = *tab;
+            app.glyph_block_dropdown_open = false;
+            app.detail_tab_scroll_y = 0.0;
+            app.focus = Focus::None;
+        }
+        HitAction::ToggleGlyphBlockDropdown => {
+            app.glyph_block_dropdown_open = !app.glyph_block_dropdown_open;
+        }
+        HitAction::SetGlyphBlockFilter(block) => {
+            app.glyph_block_filter = *block;
+            app.glyph_block_dropdown_open = false;
+            app.detail_tab_scroll_y = 0.0;
+        }
+        HitAction::OpenSettings => {
+            app.open_win_menu = None;
+            app.settings_open = true;
+        }
+        HitAction::CloseSettings => {
+            app.settings_open = false;
+        }
+        HitAction::ToggleSetting(which) => {
+            settings::apply_toggle(app, *which);
+        }
+        HitAction::ToggleAppearanceDropdown => {
+            app.appearance_dropdown_open = !app.appearance_dropdown_open;
+        }
+        HitAction::SetAppearance(appearance) => {
+            app.settings.appearance = *appearance;
+            app.settings.save();
+            app.apply_theme();
+            app.appearance_dropdown_open = false;
+        }
     }
+    true
+}
+
+/// Toggles `column`'s sort: clicking the already-active column flips
+/// direction, clicking a different one switches to it at that column's
+/// natural default direction (newest/most-first for Styles/Favorite/Date
+/// Added, alphabetical for the rest).
+fn apply_sort_click(app: &mut App, column: crate::app::ListColumnKind) {
+    use crate::app::ListColumnKind;
+    if app.list_sort.column == column {
+        app.list_sort.ascending = !app.list_sort.ascending;
+        return;
+    }
+    let ascending = !matches!(
+        column,
+        ListColumnKind::Styles | ListColumnKind::Favorite | ListColumnKind::DateAdded
+    );
+    app.list_sort = crate::app::ListSort { column, ascending };
+}
+
+/// Called on pointer motion while `app.header_press` or
+/// `app.dragging_column_reorder` is set. Promotes a press to a drag once
+/// the pointer has moved far enough, then keeps `column_reorder_target`
+/// current so `ui::list` can draw an insertion indicator.
+pub fn update_column_drag_from_point(app: &mut App, point: Point) {
+    const THRESHOLD: f64 = 4.0;
+
+    if app.dragging_column_reorder.is_none() {
+        let Some((idx, start)) = app.header_press else {
+            return;
+        };
+        if (point.x - start.x).abs() < THRESHOLD && (point.y - start.y).abs() < THRESHOLD {
+            return;
+        }
+        app.dragging_column_reorder = Some(idx);
+        app.header_press = None;
+    }
+
+    let Some(source) = app.dragging_column_reorder else {
+        return;
+    };
+    // How many *other* columns' midpoints the pointer has moved past —
+    // exactly the dragged column's final index once it's removed and
+    // reinserted, so `finish_header_interaction` can use this directly
+    // with no further off-by-one adjustment for the removal shift.
+    let target = app
+        .list_header_rects
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != source)
+        .filter(|(_, r)| (r.x0 + r.x1) / 2.0 < point.x)
+        .count();
+    app.column_reorder_target = Some(target);
+}
+
+/// Called on pointer motion while `app.column_resize_start` is set.
+pub fn update_column_resize_from_point(app: &mut App, point: Point) {
+    let Some((idx, start_x, start_width)) = app.column_resize_start else {
+        return;
+    };
+    let Some(col) = app.list_columns.get_mut(idx) else {
+        return;
+    };
+    let min = col.kind.min_width();
+    col.width = (start_width + (point.x - start_x)).max(min);
+}
+
+/// Called on mouse release: resolves whatever header interaction was in
+/// flight — a plain click becomes a sort, a drag past the threshold
+/// becomes an actual column move — and clears all of the transient drag
+/// state regardless of which one it was.
+pub fn finish_header_interaction(app: &mut App) {
+    if let Some(source) = app.dragging_column_reorder.take() {
+        if let Some(target) = app.column_reorder_target.take() {
+            let col = app.list_columns.remove(source);
+            app.list_columns.insert(target.min(app.list_columns.len()), col);
+        }
+        return;
+    }
+    if let Some((idx, _)) = app.header_press.take() {
+        if let Some(col) = app.list_columns.get(idx) {
+            apply_sort_click(app, col.kind);
+        }
+    }
+    app.column_resize_start = None;
 }
 
 /// Right-clicking a library row opens its menu; right-clicking anywhere
@@ -848,6 +1725,14 @@ pub fn handle_right_click(app: &mut App, point: Point) {
 
 /// Maps a pointer position on the rendered type-size track to a tile size.
 /// Called both at drag start and on subsequent pointer motion while captured.
+/// Maps a pointer position (mid-drag on the detail panel's own left-edge
+/// resize handle) to `App::detail_w` — wider as the pointer moves left,
+/// clamped to `[theme::DETAIL_W, App::max_detail_w(window_width)]`.
+pub fn update_detail_resize_from_point(app: &mut App, point: Point, window_width: f64) {
+    let max_w = app.max_detail_w(window_width);
+    app.detail_w = (window_width - point.x).clamp(theme::DETAIL_W, max_w);
+}
+
 pub fn update_tile_size_from_point(app: &mut App, point: Point) {
     let Some((x0, x1)) = app.tile_slider_track else {
         return;
@@ -870,12 +1755,189 @@ pub fn update_scroll_from_point(app: &mut App, point: Point) {
     app.scroll_y = progress * max_scroll;
 }
 
-fn toggle_favorite(app: &mut App, id: i64) {
+/// Copies a dropped file into the chosen library folder and rescans. Once
+/// it's landed there it's indistinguishable from a font a teammate added
+/// straight to the (externally synced) shared folder — same folder, same
+/// watcher, same scan path.
+fn assign_dropped_file(app: &mut App, folder_id: i64, source: &std::path::Path) {
+    let Some(folder) = app.folders.iter().find(|f| f.id == folder_id) else {
+        return;
+    };
+    let Some(file_name) = source.file_name() else {
+        return;
+    };
+    let dest = std::path::Path::new(&folder.path).join(file_name);
+    match std::fs::copy(source, &dest) {
+        Ok(_) => match app.catalog.rescan() {
+            Ok(result) => app.reload_folders_and_fonts(result.status),
+            Err(e) => app.status = e.to_string(),
+        },
+        Err(e) => app.status = format!("couldn't add font: {e}"),
+    }
+}
+
+pub fn toggle_favorite(app: &mut App, id: i64) {
     if let Ok(favorite) = app.catalog.toggle_favorite(id) {
         if favorite {
             app.favorite_ids.insert(id);
         } else {
             app.favorite_ids.remove(&id);
         }
+        app.favorites_version += 1;
+    }
+}
+
+/// The "Add Library" flow — a folder picker, then indexing whatever it
+/// finds. Shared by the toolbar button (`HitAction::AddFolder`) and the
+/// macOS menu bar's File ▸ Add Library\u{2026}.
+pub fn add_library(app: &mut App) {
+    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+        let path = dir.to_string_lossy().into_owned();
+        match app.catalog.add_folder(&path) {
+            Ok(result) => app.reload_folders_and_fonts(result.status),
+            Err(e) => app.status = e.to_string(),
+        }
+    }
+}
+
+/// The manual "no really, check right now" sync — see `Catalog::
+/// force_sync`. Shared by the toolbar's refresh button
+/// (`HitAction::Rescan`) and the macOS menu bar's File ▸ Sync Now.
+pub fn sync_now(app: &mut App) {
+    app.status = "Syncing\u{2026}".to_string();
+    match app.catalog.force_sync() {
+        Ok(result) => app.reload_folders_and_fonts(result.status),
+        Err(e) => app.status = e.to_string(),
+    }
+}
+
+/// The Font-menu actions below all act on `app.selected` and are shared
+/// between the macOS native menu bar (`native_menu.rs`) and the
+/// hand-rolled Windows one — every real item on either one routes through
+/// exactly one of these, never a copy.
+fn selected_is_system(app: &App, id: i64) -> bool {
+    app.entry(id).is_some_and(|e| e.is_system)
+}
+
+/// Font ▸ Activate — explicit, unlike the toolbar dot's toggle: a no-op if
+/// already active.
+pub fn activate_selected(app: &mut App) {
+    let Some(id) = app.selected else { return };
+    if selected_is_system(app, id) || app.active_ids.contains(&id) {
+        return;
+    }
+    if app.catalog.toggle_activation(id).unwrap_or(false) {
+        app.active_ids.insert(id);
+    }
+}
+
+/// Font ▸ Deactivate — explicit, unlike the toolbar dot's toggle: a no-op
+/// if already inactive.
+pub fn deactivate_selected(app: &mut App) {
+    let Some(id) = app.selected else { return };
+    if selected_is_system(app, id) || !app.active_ids.contains(&id) {
+        return;
+    }
+    if !app.catalog.toggle_activation(id).unwrap_or(true) {
+        app.active_ids.remove(&id);
+    }
+}
+
+/// Font ▸ Activate Temporarily — see `Catalog::activate_temporarily` and
+/// `App::temp_active_ids`, which is what makes the "temporarily" part real
+/// (uninstalled on quit rather than persisted).
+pub fn activate_selected_temporarily(app: &mut App) {
+    let Some(id) = app.selected else { return };
+    if selected_is_system(app, id) {
+        return;
+    }
+    if app.catalog.activate_temporarily(id).unwrap_or(false) {
+        app.active_ids.insert(id);
+        app.temp_active_ids.insert(id);
+    }
+}
+
+pub fn toggle_selected_favorite(app: &mut App) {
+    if let Some(id) = app.selected {
+        toggle_favorite(app, id);
+    }
+}
+
+/// Font ▸ Export… — copies the selected font's file out to wherever the
+/// user picks, e.g. to hand a single font to someone outside the library.
+pub fn export_selected(app: &mut App) {
+    let Some(entry) = app.selected.and_then(|id| app.entry(id)) else {
+        return;
+    };
+    let source = std::path::PathBuf::from(&entry.path);
+    let file_name = source
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("{}.ttf", entry.family));
+    if let Some(dest) = rfd::FileDialog::new().set_file_name(&file_name).save_file() {
+        if let Err(e) = std::fs::copy(&source, &dest) {
+            app.status = format!("couldn't export: {e}");
+        }
+    }
+}
+
+/// Font ▸ Show in Finder — the selected font's specific *file*, not its
+/// library folder (that's the sidebar row's own context-menu action).
+pub fn reveal_selected(app: &App) {
+    if let Some(entry) = app.selected.and_then(|id| app.entry(id)) {
+        let _ = crate::reveal::reveal_file(std::path::Path::new(&entry.path));
+    }
+}
+
+/// Font ▸ Remove from Fontlist — see `Catalog::remove_from_fontlist`.
+pub fn remove_selected_from_fontlist(app: &mut App) {
+    let Some(id) = app.selected else { return };
+    if selected_is_system(app, id) {
+        return;
+    }
+    match app.catalog.remove_from_fontlist(id) {
+        Ok(()) => {
+            app.selected = None;
+            app.reload_folders_and_fonts("Removed from fontlist".to_string());
+        }
+        Err(e) => app.status = e.to_string(),
+    }
+}
+
+/// Font ▸ Delete from Library — only ever opens the confirmation overlay
+/// (`ui::draw_delete_confirm`); the real, unrecoverable delete happens on
+/// `HitAction::ConfirmDelete`, never from a menu click alone.
+pub fn request_delete_selected(app: &mut App) {
+    let Some(id) = app.selected else { return };
+    if !selected_is_system(app, id) {
+        app.confirm_delete = Some(id);
+    }
+}
+
+/// Help ▸ GlyphClub on GitHub — shared by the macOS menu and the
+/// hand-rolled Windows one.
+pub fn open_github_repo() {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open")
+        .arg("https://github.com/tonykastaneda/GlyphClub")
+        .spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", "https://github.com/tonykastaneda/GlyphClub"])
+        .spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = std::process::Command::new("xdg-open")
+        .arg("https://github.com/tonykastaneda/GlyphClub")
+        .spawn();
+}
+
+/// Uninstalls every temporarily-activated font — the one real bit of
+/// cleanup GlyphClub needs before the process actually ends, which is why
+/// `main.rs` routes every quit path (traffic-light close, `Cmd+Q`, the
+/// menu's Quit item, `WindowEvent::CloseRequested`) through this before
+/// calling `event_loop.exit()`, rather than any of them exiting directly.
+pub fn cleanup_before_quit(app: &mut App) {
+    for id in std::mem::take(&mut app.temp_active_ids) {
+        let _ = app.catalog.force_deactivate(id);
     }
 }
