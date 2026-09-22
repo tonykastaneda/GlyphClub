@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Changelog — GlyphClub</title>
+<meta name="description" content="What's new in GlyphClub." />
+<link rel="icon" type="image/png" href="assets/app-icon.png" />
+<link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+
+<nav class="wrap">
+  <a href="index.html" style="display:flex; align-items:center; gap:10px; text-decoration:none;">
+    <img class="icon" src="assets/icon.svg" alt="" />
+    <img class="wordmark" src="assets/wordmark.svg" alt="GlyphClub" />
+  </a>
+  <div class="spacer"></div>
+  <a class="navlink" href="changelog.html">Changelog</a>
+  <a class="gh" href="https://github.com/tonykastaneda/GlyphClub" target="_blank" rel="noopener">GitHub ↗</a>
+</nav>
+
+<main class="changelog wrap">
+  <h1>Changelog</h1>
+
+  <div class="entry">
+    <p class="date">September 21, 2026</p>
+    <h2>0.1.0 — First build</h2>
+
+    <div class="group">
+      <p class="group-label">🎉 New</p>
+      <ul>
+        <li>Native macOS + Windows app — no browser, no Electron, no web app wrapper.</li>
+        <li>Point GlyphClub at any folder your team already syncs (Dropbox, Drive, iCloud, OneDrive, SMB) — no account, no OAuth.</li>
+        <li>A folder watcher picks up new fonts dropped straight into a shared library automatically.</li>
+        <li>Drag a font onto the window and choose which library to file it into.</li>
+        <li>Manual sync button that touches every file first, for cloud clients that need a nudge before they'll sync.</li>
+        <li>Real system-level font activation on both macOS and Windows.</li>
+        <li>Activation memory — removing and re-adding a library folder restores whatever was active in it.</li>
+        <li>Grid and list views, with a live sample-text preview picker.</li>
+      </ul>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <a href="https://github.com/tonykastaneda/GlyphClub">github.com/tonykastaneda/GlyphClub</a>
+</footer>
+
+</body>
+</html>
