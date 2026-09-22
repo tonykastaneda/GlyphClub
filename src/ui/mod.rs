@@ -1226,20 +1226,23 @@ fn draw_windows_menu_bar(
     // whether it's currently enabled, and the action a click on it runs.
     // Checkmark state for the two View items comes from `app.view_mode`
     // directly rather than being threaded through here.
-    let sep = (None, true, None);
+    //
+    // Each separator below is its own fresh literal rather than a shared
+    // `sep` variable — `HitAction` isn't `Copy`, so a single shared binding
+    // can only be moved into one of these `vec![...]` slots before it's gone.
     let items: Vec<(Option<&str>, bool, Option<HitAction>)> = match kind {
         WinMenuKind::File => vec![
             (Some("Add Library\u{2026}"), true, Some(HitAction::AddFolder)),
             (Some("Sync Now"), true, Some(HitAction::Rescan)),
-            sep,
+            (None, true, None),
             (Some("Settings\u{2026}"), true, Some(HitAction::OpenSettings)),
         ],
         WinMenuKind::View => vec![
             (Some("as Grid"), true, Some(HitAction::SetViewMode(ViewMode::Grid))),
             (Some("as List"), true, Some(HitAction::SetViewMode(ViewMode::List))),
-            sep,
+            (None, true, None),
             (Some("Show Font Info"), true, Some(HitAction::ToggleDetailPanel)),
-            sep,
+            (None, true, None),
             (Some("Zoom In"), true, Some(HitAction::ZoomIn)),
             (Some("Zoom Out"), true, Some(HitAction::ZoomOut)),
         ],
@@ -1259,12 +1262,12 @@ fn draw_windows_menu_bar(
                 has_selection && !is_system_selected && is_active,
                 Some(HitAction::DeactivateSelected),
             ),
-            sep,
+            (None, true, None),
             (Some("Mark Favorite"), has_selection, Some(HitAction::ToggleDetailFavorite)),
-            sep,
+            (None, true, None),
             (Some("Export\u{2026}"), has_selection, Some(HitAction::ExportSelectedFont)),
             (Some("Show in Explorer"), has_selection, Some(HitAction::RevealSelectedFont)),
-            sep,
+            (None, true, None),
             (
                 Some("Remove from Fontlist"),
                 has_selection && !is_system_selected,

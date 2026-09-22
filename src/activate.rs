@@ -156,7 +156,7 @@ mod platform {
     pub fn uninstall(installed: &Path) -> Result<()> {
         let wide = wide_null(installed);
         unsafe {
-            let _ = RemoveFontResourceExW(PCWSTR(wide.as_ptr()), FR_PRIVATE, None);
+            let _ = RemoveFontResourceExW(PCWSTR(wide.as_ptr()), FR_PRIVATE.0, None);
         }
         broadcast_font_change();
 
