@@ -19,8 +19,11 @@ pub struct ScanSummary {
 /// Walks `folder` on disk, parses whatever is new or changed since the last
 /// scan (compared by mtime + size against the cache), and drops entries for
 /// files that no longer exist. Unchanged files are never re-parsed, which is
-/// what keeps repeat scans of a 20k-font library fast.
-pub fn scan_folder(store: &mut Store, folder: &Folder) -> Result<ScanSummary> {
+/// what keeps repeat scans of a 20k-font library fast. `ignored` (Font ▸
+/// Remove from Fontlist — see `store::ignored_paths`) is skipped entirely,
+/// as if the file weren't there: not indexed, and not treated as "removed"
+/// either, since it's really still sitting on disk.
+pub fn scan_folder(store: &mut Store, folder: &Folder, ignored: &HashSet<String>) -> Result<ScanSummary> {
     let known = store.known_files(folder.id)?;
     let mut seen = HashSet::with_capacity(known.len());
     let mut to_parse: Vec<(String, i64, i64)> = Vec::new();
@@ -34,6 +37,10 @@ pub fn scan_folder(store: &mut Store, folder: &Folder) -> Result<ScanSummary> {
         if !entry.file_type().is_file() || !has_font_extension(path) {
             continue;
         }
+        let path_str = path.to_string_lossy().into_owned();
+        if ignored.contains(&path_str) {
+            continue;
+        }
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
@@ -44,7 +51,6 @@ pub fn scan_folder(store: &mut Store, folder: &Folder) -> Result<ScanSummary> {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         let size = metadata.len() as i64;
-        let path_str = path.to_string_lossy().into_owned();
 
         seen.insert(path_str.clone());
 
@@ -84,6 +90,35 @@ pub fn scan_folder(store: &mut Store, folder: &Folder) -> Result<ScanSummary> {
     Ok(summary)
 }
 
+/// Reads every font file in `folder` (regardless of whether its cached
+/// mtime/size looks unchanged — that optimization is exactly what this
+/// bypasses) and bumps its mtime. For a library folder that's really a
+/// synced Dropbox/Drive/OneDrive/iCloud folder, those clients typically
+/// only materialize a cloud-only placeholder — or notice it needs to sync
+/// at all — once something local actually touches the file; a plain
+/// directory listing often isn't enough. This is what the toolbar's
+/// rescan button does before its normal rescan, as a manual "no really,
+/// check right now" escape hatch for whichever sync client is being lazy.
+/// Best-effort throughout: one unreadable file doesn't stop the rest.
+pub fn force_touch_folder(folder: &Folder) -> usize {
+    let mut touched = 0usize;
+    for entry in WalkDir::new(&folder.path)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !entry.file_type().is_file() || !has_font_extension(path) {
+            continue;
+        }
+        if std::fs::read(path).is_ok() {
+            let _ = filetime::set_file_mtime(path, filetime::FileTime::now());
+            touched += 1;
+        }
+    }
+    touched
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
@@ -98,7 +133,7 @@ mod tests {
             path: "/System/Library/Fonts".to_string(),
         };
 
-        let first = scan_folder(&mut store, &folder).unwrap();
+        let first = scan_folder(&mut store, &folder, &HashSet::new()).unwrap();
         assert!(first.parsed_files > 0, "expected system fonts to be found");
 
         let all = store.all_fonts().unwrap();
@@ -109,7 +144,7 @@ mod tests {
         );
 
         // A second scan with nothing changed on disk should re-parse nothing.
-        let second = scan_folder(&mut store, &folder).unwrap();
+        let second = scan_folder(&mut store, &folder, &HashSet::new()).unwrap();
         assert_eq!(second.parsed_files, 0);
         assert_eq!(second.removed_files, 0);
     }

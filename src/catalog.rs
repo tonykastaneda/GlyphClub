@@ -4,16 +4,42 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
+use notify_debouncer_mini::notify::RecursiveMode;
+use notify_debouncer_mini::{new_debouncer, Debouncer};
 
 use crate::activate;
 use crate::activation_memory;
-use crate::scan::scan_folder;
+use crate::scan::{force_touch_folder, scan_folder};
 use crate::store::{Folder, FontRow, Store};
 
 pub struct ScanResult {
     pub status: String,
+}
+
+/// The OS-managed font directories — auto-added as libraries (see
+/// `Catalog::open`) rather than something the user has to point "Add
+/// Library" at themselves, since they're what the sidebar's System Fonts
+/// filter actually needs fonts to come from. `crate::font::is_system_path`
+/// is the other half of this: it's what tells the sidebar's own
+/// "LIBRARIES" list to hide these rows (they're not a folder the user
+/// picked, so removing them the normal way wouldn't make sense) and what
+/// marks a scanned font as `is_system` in the first place.
+fn system_font_dirs() -> &'static [&'static str] {
+    #[cfg(target_os = "macos")]
+    {
+        &["/System/Library/Fonts", "/Library/Fonts"]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        &[r"C:\Windows\Fonts"]
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        &[]
+    }
 }
 
 fn catalog_path() -> PathBuf {
@@ -33,13 +59,71 @@ pub struct Catalog {
     /// removing then re-adding a library folder restores what was active
     /// in it instead of just losing that.
     active_memory: HashSet<String>,
+    /// Paths a scan should skip entirely — see `store::ignored_paths`.
+    /// Loaded once at `open()` and kept in sync by `remove_from_fontlist`,
+    /// same pattern as `active_memory`.
+    ignored: HashSet<String>,
+    /// Watches every library folder for changes so a teammate dropping
+    /// fonts straight into the (externally synced) shared folder shows up
+    /// without anyone touching the app. `None` if the watcher failed to
+    /// start (e.g. an unsupported platform backend) — everything still
+    /// works via the manual rescan button, just without the automatic
+    /// part. Kept in sync with the folder list by `add_folder`/
+    /// `remove_folder`, which is why they need `&mut self`.
+    watcher: Option<Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>>,
 }
 
 impl Catalog {
-    pub fn open() -> Result<Self> {
+    /// `on_change` fires (from the watcher's own background thread —
+    /// callers that need to touch UI state should hop back to their main
+    /// thread, e.g. via a `winit::event_loop::EventLoopProxy`) whenever a
+    /// watched folder changes. Debounced to one call per ~800ms of
+    /// activity, not once per individual file event.
+    pub fn open(on_change: impl Fn() + Send + 'static) -> Result<Self> {
+        let mut store = Store::open(&catalog_path())?;
+        let active_memory = activation_memory::load();
+        let ignored = store.ignored_paths().unwrap_or_default();
+
+        // Ensures the OS's own font directories are always a library —
+        // scanned every launch (not just the first) so System Fonts stays
+        // current without anyone needing to hit Sync for it specifically;
+        // cheap after the first run since `scan_folder` only re-parses
+        // whatever actually changed.
+        for &dir in system_font_dirs() {
+            if !Path::new(dir).is_dir() {
+                continue;
+            }
+            if let Ok(id) = store.add_folder(dir) {
+                let folder = Folder { id, path: dir.to_string() };
+                let _ = scan_folder(&mut store, &folder, &ignored);
+            }
+        }
+
+        let mut watcher = new_debouncer(
+            Duration::from_millis(800),
+            move |res: notify_debouncer_mini::DebounceEventResult| {
+                if res.is_ok() {
+                    on_change();
+                }
+            },
+        )
+        .ok();
+
+        if let Some(w) = watcher.as_mut() {
+            if let Ok(folders) = store.list_folders() {
+                for folder in &folders {
+                    let _ = w
+                        .watcher()
+                        .watch(Path::new(&folder.path), RecursiveMode::Recursive);
+                }
+            }
+        }
+
         Ok(Self {
-            store: Store::open(&catalog_path())?,
-            active_memory: activation_memory::load(),
+            store,
+            active_memory,
+            ignored,
+            watcher,
         })
     }
 
@@ -65,9 +149,12 @@ impl Catalog {
 
     pub fn add_folder(&mut self, path: &str) -> Result<ScanResult> {
         let id = self.store.add_folder(path)?;
+        if let Some(w) = self.watcher.as_mut() {
+            let _ = w.watcher().watch(Path::new(path), RecursiveMode::Recursive);
+        }
         let folders = self.store.list_folders()?;
         let mut status = match folders.iter().find(|f| f.id == id) {
-            Some(folder) => match scan_folder(&mut self.store, folder) {
+            Some(folder) => match scan_folder(&mut self.store, folder, &self.ignored) {
                 Ok(summary) => {
                     format!(
                         "{} indexed, {} failed",
@@ -92,6 +179,13 @@ impl Catalog {
     /// `active_memory`: that's what lets re-adding the same folder later
     /// restore these instead of the intent being lost with the rows.
     pub fn remove_folder(&mut self, id: i64) -> Result<()> {
+        let path = self
+            .store
+            .list_folders()
+            .ok()
+            .and_then(|fs| fs.into_iter().find(|f| f.id == id))
+            .map(|f| f.path);
+
         if let Ok(fonts) = self.store.fonts_in_folder(id) {
             let active = self.store.active_ids().unwrap_or_default();
             for row in fonts {
@@ -102,7 +196,12 @@ impl Catalog {
                 }
             }
         }
-        self.store.remove_folder(id)
+        self.store.remove_folder(id)?;
+
+        if let (Some(w), Some(p)) = (self.watcher.as_mut(), path) {
+            let _ = w.watcher().unwatch(Path::new(&p));
+        }
+        Ok(())
     }
 
     pub fn rescan(&mut self) -> Result<ScanResult> {
@@ -111,7 +210,7 @@ impl Catalog {
         let mut removed = 0usize;
         let mut failed = 0usize;
         for folder in &folders {
-            if let Ok(summary) = scan_folder(&mut self.store, folder) {
+            if let Ok(summary) = scan_folder(&mut self.store, folder, &self.ignored) {
                 parsed += summary.parsed_files;
                 removed += summary.removed_files;
                 failed += summary.failed_files;
@@ -123,6 +222,21 @@ impl Catalog {
             status.push_str(&format!(", {restored} reactivated from memory"));
         }
         Ok(ScanResult { status })
+    }
+
+    /// What the toolbar's rescan button actually triggers: reads every
+    /// font file in every library first (bypassing the normal
+    /// unchanged-file skip), *then* does a normal rescan. See
+    /// `scan::force_touch_folder` for why — a synced folder's cloud
+    /// client sometimes needs a local touch before it'll actually sync.
+    pub fn force_sync(&mut self) -> Result<ScanResult> {
+        let folders = self.store.list_folders()?;
+        let touched: usize = folders.iter().map(force_touch_folder).sum();
+        let mut result = self.rescan()?;
+        if touched > 0 {
+            result.status = format!("touched {touched} files, {}", result.status);
+        }
+        Ok(result)
     }
 
     /// Re-activates any catalogued font whose path is in `active_memory`
@@ -177,6 +291,88 @@ impl Catalog {
             activation_memory::save(&self.active_memory);
             Ok(true)
         }
+    }
+
+    /// Installs `id` without recording it in `active_memory` — it shows
+    /// active for the rest of this session (and, like any other active
+    /// font, survives a folder remove/re-add via `reconcile_activation`)
+    /// but won't be restored on the next launch, and gets uninstalled
+    /// outright when the app quits — see `main.rs`'s quit handling and
+    /// `App::temp_active_ids`, which is what actually makes it temporary.
+    /// A no-op if `id` is already active, temporarily or not.
+    pub fn activate_temporarily(&mut self, id: i64) -> Result<bool> {
+        if self.store.active_ids()?.contains(&id) {
+            return Ok(false);
+        }
+        let (path, _) = self
+            .store
+            .font_path(id)?
+            .ok_or_else(|| anyhow!("font not found"))?;
+        let installed = activate::install(Path::new(&path), &format!("glyphclub-{id}"))?;
+        self.store
+            .record_activation(id, &installed.to_string_lossy())?;
+        Ok(true)
+    }
+
+    /// Deactivates `id` without touching `active_memory` — the
+    /// counterpart to `activate_temporarily`, and also what quit-time
+    /// cleanup calls for every font that was only ever temporarily
+    /// activated. A no-op if `id` isn't active.
+    pub fn force_deactivate(&mut self, id: i64) -> Result<()> {
+        if let Some(installed) = self.store.clear_activation(id)? {
+            let _ = activate::uninstall(Path::new(&installed));
+        }
+        Ok(())
+    }
+
+    /// Font ▸ Remove from Fontlist: untracks every face of `id`'s file
+    /// without touching it on disk — deactivates whichever of them are
+    /// active, drops all of their `fonts` rows, and remembers the path so
+    /// `scan_folder` won't just re-discover and re-add it on the next
+    /// scan (see `store::ignored_paths`).
+    pub fn remove_from_fontlist(&mut self, id: i64) -> Result<()> {
+        let (path, _) = self
+            .store
+            .font_path(id)?
+            .ok_or_else(|| anyhow!("font not found"))?;
+        self.deactivate_path(&path)?;
+        self.store.delete_path(&path)?;
+        self.store.ignore_path(&path)?;
+        self.ignored.insert(path);
+        Ok(())
+    }
+
+    /// Font ▸ Delete from Library: deletes the actual file from disk — a
+    /// real, unrecoverable, and (since a library is typically a team's
+    /// externally-synced folder) *shared* action, which is why the UI
+    /// that calls this always confirms first (see `App::confirm_delete`).
+    pub fn delete_font_file(&mut self, id: i64) -> Result<()> {
+        let (path, _) = self
+            .store
+            .font_path(id)?
+            .ok_or_else(|| anyhow!("font not found"))?;
+        self.deactivate_path(&path)?;
+        self.store.delete_path(&path)?;
+        std::fs::remove_file(&path)?;
+        Ok(())
+    }
+
+    /// Deactivates every face sharing `path` and forgets them in
+    /// `active_memory` — shared by `remove_from_fontlist` and
+    /// `delete_font_file`, both of which need every co-located face
+    /// (a `.ttc`/`.otc` collection can bundle several) cleaned up, not
+    /// just whichever single face the UI had selected.
+    fn deactivate_path(&mut self, path: &str) -> Result<()> {
+        let active = self.store.active_ids().unwrap_or_default();
+        for face_id in self.store.font_ids_for_path(path)? {
+            if active.contains(&face_id) {
+                self.force_deactivate(face_id)?;
+            }
+        }
+        if self.active_memory.remove(path) {
+            activation_memory::save(&self.active_memory);
+        }
+        Ok(())
     }
 
     pub fn toggle_favorite(&mut self, id: i64) -> Result<bool> {

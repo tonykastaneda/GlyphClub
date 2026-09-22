@@ -67,6 +67,27 @@ fn best_name(face: &ttf_parser::Face, preferred_id: u16, fallback_id: u16) -> Op
     fallback
 }
 
+/// A human label for the list view's Format column, derived from the file
+/// extension alone — true outline-format detection (TrueType `glyf` vs.
+/// PostScript `CFF `/`CFF2` tables) would need re-parsing the font, but the
+/// extension already tracks that distinction closely enough in practice
+/// (almost every real-world `.otf` is CFF-outline, almost every `.ttf` is
+/// `glyf`) to show here without the extra parse cost on every list render.
+pub fn format_label(path: &str) -> &'static str {
+    match Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("ttf") => "TrueType",
+        Some("otf") => "OpenType PostScript",
+        Some("ttc") => "TrueType Collection",
+        Some("otc") => "OpenType Collection",
+        _ => "Unknown",
+    }
+}
+
 pub const FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 
 pub fn has_font_extension(path: &Path) -> bool {

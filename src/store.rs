@@ -67,6 +67,15 @@ impl Store {
             CREATE TABLE IF NOT EXISTS favorites (
                 font_id INTEGER PRIMARY KEY REFERENCES fonts(id) ON DELETE CASCADE
             );
+
+            -- File paths removed via Font > Remove from Fontlist (or the
+            -- hand-rolled Windows equivalent) -- the file itself is
+            -- untouched and still sits in its watched folder, so without
+            -- this a rescan would just re-discover and re-add it right
+            -- back. scan_folder skips anything listed here.
+            CREATE TABLE IF NOT EXISTS ignored_paths (
+                path TEXT PRIMARY KEY
+            );
             ",
         )?;
         Ok(Self { conn })
@@ -202,6 +211,18 @@ impl Store {
         Ok(rows)
     }
 
+    /// Every face's id sharing `path` — a plain font file has exactly one,
+    /// but a `.ttc`/`.otc` collection can bundle several, and deleting or
+    /// removing-from-fontlist needs to account for every one of them, not
+    /// just whichever single face the UI happened to have selected.
+    pub fn font_ids_for_path(&self, path: &str) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM fonts WHERE path = ?1")?;
+        let rows = stmt
+            .query_map([path], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     pub fn font_path(&self, id: i64) -> Result<Option<(String, u32)>> {
         let result = self
             .conn
@@ -256,6 +277,24 @@ impl Store {
             .query_map([], |row| row.get(0))?
             .collect::<rusqlite::Result<HashSet<_>>>()?;
         Ok(rows)
+    }
+
+    /// Every path `scan_folder` should skip re-indexing — see
+    /// `ignored_paths`'s doc comment.
+    pub fn ignored_paths(&self) -> Result<HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT path FROM ignored_paths")?;
+        let rows = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<HashSet<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn ignore_path(&self, path: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO ignored_paths (path) VALUES (?1)",
+            [path],
+        )?;
+        Ok(())
     }
 
     pub fn set_favorite(&self, font_id: i64, favorite: bool) -> Result<()> {
