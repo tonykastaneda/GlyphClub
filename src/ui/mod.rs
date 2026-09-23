@@ -467,6 +467,8 @@ pub fn draw(app: &mut App, text: &mut TextCx, width: f64, height: f64) -> Scene 
 
     draw_context_menu(app, text, &mut scene);
     draw_font_context_menu(app, text, &mut scene);
+    #[cfg(target_os = "windows")]
+    draw_windows_menu_dropdown(app, text, &mut scene, width);
 
     if app.settings_open {
         settings::draw(app, text, &mut scene, width, height);
@@ -1483,6 +1485,18 @@ fn draw_windows_menu_bar(
         });
         cx += w;
     }
+}
+
+/// The open Windows menu's own dropdown panel — deliberately *not* drawn
+/// from inside `draw_windows_menu_bar` (called from `draw_toolbar`, which
+/// runs before the grid/list) but from `draw` itself, last, alongside
+/// `draw_context_menu`/`draw_font_context_menu`. Drawing it early meant
+/// the grid/list painted over it every time a menu was open — this is
+/// Windows-only code a macOS build never even type-checks, let alone
+/// visually catches, which is exactly how it went unnoticed all session.
+#[cfg(target_os = "windows")]
+fn draw_windows_menu_dropdown(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: f64) {
+    use crate::app::WinMenuKind;
 
     let Some(kind) = app.open_win_menu else {
         app.win_menu_panel_rect = Rect::ZERO;
@@ -1491,6 +1505,7 @@ fn draw_windows_menu_bar(
     let Some(&(_, anchor)) = app.win_menu_bar_rects.iter().find(|(k, _)| *k == kind) else {
         return;
     };
+    let (x0, x1) = (0.0, width);
 
     let selected_font = app.selected.and_then(|id| app.entry(id));
     let is_system_selected = selected_font.map(|e| e.is_system).unwrap_or(false);
