@@ -70,6 +70,9 @@ pub(crate) enum AppEvent {
     /// repaint to pick up the now-ready data, not a full `reload_fonts`
     /// (which would also reset `scroll_y`, wrong mid-scroll).
     Redraw,
+    /// The one-shot startup version check (`app::check_for_update`) found
+    /// a newer release than this build — carries its version string.
+    UpdateAvailable(String),
 }
 
 struct WindowState {
@@ -95,6 +98,7 @@ impl Shell {
             let _ = watcher_proxy.send_event(AppEvent::FoldersChanged);
         })
         .expect("open catalog database");
+        app::check_for_update(proxy.clone());
         Self {
             gpu: Gpu::new(),
             text: TextCx::new(),
@@ -715,6 +719,13 @@ impl ApplicationHandler<AppEvent> for Shell {
                 }
             }
             AppEvent::Redraw => {
+                if let Some(state) = &self.state {
+                    state.window.request_redraw();
+                }
+            }
+            AppEvent::UpdateAvailable(version) => {
+                self.app.update_available = Some(version);
+                self.app.update_dismissed = false;
                 if let Some(state) = &self.state {
                     state.window.request_redraw();
                 }

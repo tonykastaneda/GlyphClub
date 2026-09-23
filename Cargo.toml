@@ -30,6 +30,11 @@ ttf-parser = "0.25"
 walkdir = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Only used for the startup update check (see app::check_for_update) — a
+# single blocking GET against the GitHub releases API on a background
+# thread, so this deliberately stays a small synchronous client rather
+# than pulling in an async runtime just for that.
+ureq = { version = "3", features = ["json"] }
 
 # GUI: no widget toolkit — winit owns the window/event loop, wgpu is the
 # GPU backend, vello rasterizes the scene onto it. vello re-exports its

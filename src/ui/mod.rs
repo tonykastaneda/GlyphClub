@@ -95,6 +95,10 @@ pub enum HitAction {
     /// Switches the Tags submenu's "New Tag…" row into its inline text
     /// field, focused and ready to type.
     OpenNewTagField,
+    /// The update banner's own close button.
+    DismissUpdateBanner,
+    /// The update banner's "Download" button.
+    OpenUpdateDownload,
 }
 
 pub struct HitRegion {
@@ -474,6 +478,8 @@ pub fn draw(app: &mut App, text: &mut TextCx, width: f64, height: f64) -> Scene 
         settings::draw(app, text, &mut scene, width, height);
     }
 
+    draw_update_banner(app, text, &mut scene, width, height);
+
     // Drawn last: a real file delete is the one truly irreversible action
     // in this app, so its confirmation sits above every other overlay.
     if app.confirm_delete.is_some() {
@@ -651,6 +657,54 @@ fn draw_drag_hover(
     let caption = "Drop to add a font";
     let tw = text.measure(caption, 14.0, None);
     text.draw(scene, caption, 14.0, None, theme::TEXT_SECONDARY(), cx - tw / 2.0, cy + 80.0);
+}
+
+/// A dismissible card, bottom-right corner — drawn only once
+/// `App::update_available` (see `check_for_update`) has an answer and the
+/// user hasn't already closed it this session. No auto-download/install:
+/// the button just opens the releases page in the system browser.
+fn draw_update_banner(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: f64, height: f64) {
+    if app.update_dismissed {
+        return;
+    }
+    let Some(version) = app.update_available.clone() else {
+        return;
+    };
+
+    let pad = 16.0;
+    let card_w = 260.0;
+    let card_h = 108.0;
+    let card = Rect::new(width - 20.0 - card_w, height - 20.0 - card_h, width - 20.0, height - 20.0);
+
+    fill_rect(scene, card, theme::SIDEBAR_BG(), 14.0);
+    stroke_rect(scene, card, theme::CONTROL_BORDER(), 14.0, 1.0);
+
+    text.draw(scene, "Update available", 13.0, None, theme::TEXT(), card.x0 + pad, card.y0 + 26.0);
+    let subtitle = format!("Version {version} is ready");
+    text.draw(scene, &subtitle, 11.5, None, theme::TEXT_SECONDARY(), card.x0 + pad, card.y0 + 46.0);
+
+    let close_rect = Rect::new(card.x1 - 30.0, card.y0 + 4.0, card.x1 - 6.0, card.y0 + 28.0);
+    if close_rect.contains(app.hover) {
+        fill_rect(scene, close_rect, theme::NAV_HOVER_BG(), 6.0);
+    }
+    let (ccx, ccy) = (close_rect.center().x, close_rect.center().y);
+    let s = 3.6;
+    let close_color = theme::TEXT_SECONDARY();
+    scene.stroke(&Stroke::new(1.3), Affine::IDENTITY, close_color, None, &Line::new((ccx - s, ccy - s), (ccx + s, ccy + s)));
+    scene.stroke(&Stroke::new(1.3), Affine::IDENTITY, close_color, None, &Line::new((ccx - s, ccy + s), (ccx + s, ccy - s)));
+    app.hit_regions.push(HitRegion { rect: close_rect, action: HitAction::DismissUpdateBanner });
+
+    let btn = Rect::new(card.x0 + pad, card.y0 + 64.0, card.x1 - pad, card.y0 + 92.0);
+    let btn_color = if btn.contains(app.hover) {
+        theme::BRAND_ACCENT().with_alpha(0.85)
+    } else {
+        theme::BRAND_ACCENT()
+    };
+    fill_rect(scene, btn, btn_color, 13.0);
+    let label = "Download";
+    let tw = text.measure(label, 12.5, None);
+    text.draw_centered_v(scene, label, 12.5, None, theme::CANVAS(), btn.x0 + (btn.width() - tw) / 2.0, btn.y0, btn.y1);
+    app.hit_regions.push(HitRegion { rect: btn, action: HitAction::OpenUpdateDownload });
 }
 
 fn draw_drop_flash(scene: &mut Scene, text: &mut TextCx, width: f64, height: f64) {
@@ -1956,6 +2010,12 @@ pub fn handle_click(app: &mut App, point: Point) -> bool {
             }
             app.focus = Focus::NewTag;
         }
+        HitAction::DismissUpdateBanner => {
+            app.update_dismissed = true;
+        }
+        HitAction::OpenUpdateDownload => {
+            open_latest_release();
+        }
     }
     true
 }
@@ -2315,18 +2375,25 @@ pub fn request_delete_selected(app: &mut App) {
 /// Help ▸ GlyphClub on GitHub — shared by the macOS menu and the
 /// hand-rolled Windows one.
 pub fn open_github_repo() {
+    open_url("https://github.com/tonykastaneda/GlyphClub");
+}
+
+/// The update banner's "Download" button — same releases-page link the
+/// docs site's own download buttons ultimately point at, rather than
+/// pulling a file straight into the running app (no self-updater here,
+/// see the packaging discussion this shipped with for why that's out of
+/// scope for now).
+pub fn open_latest_release() {
+    open_url("https://github.com/tonykastaneda/GlyphClub/releases/latest");
+}
+
+fn open_url(url: &str) {
     #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open")
-        .arg("https://github.com/tonykastaneda/GlyphClub")
-        .spawn();
+    let _ = std::process::Command::new("open").arg(url).spawn();
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", "start", "https://github.com/tonykastaneda/GlyphClub"])
-        .spawn();
+    let _ = std::process::Command::new("cmd").args(["/C", "start", url]).spawn();
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let _ = std::process::Command::new("xdg-open")
-        .arg("https://github.com/tonykastaneda/GlyphClub")
-        .spawn();
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
 
 /// Uninstalls every temporarily-activated font — the one real bit of

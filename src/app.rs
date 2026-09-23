@@ -281,6 +281,58 @@ enum Prefetch<T> {
     Failed,
 }
 
+/// Kicks off a one-shot, background version check against the GitHub
+/// releases API — fires `AppEvent::UpdateAvailable(version)` back to the
+/// main thread only if a newer release actually exists, never on a
+/// network failure or when already up to date, so there's nothing for
+/// the event loop to do on the common case but silently receive nothing.
+pub fn check_for_update(proxy: EventLoopProxy<AppEvent>) {
+    std::thread::spawn(move || {
+        let Some(latest) = fetch_latest_release_version() else {
+            return;
+        };
+        if is_newer_version(&latest, env!("CARGO_PKG_VERSION")) {
+            let _ = proxy.send_event(AppEvent::UpdateAvailable(latest));
+        }
+    });
+}
+
+fn fetch_latest_release_version() -> Option<String> {
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(8)))
+        .build();
+    let agent: ureq::Agent = config.into();
+    let body: serde_json::Value = agent
+        .get("https://api.github.com/repos/tonykastaneda/GlyphClub/releases/latest")
+        // GitHub's API rejects requests with no User-Agent at all.
+        .header("User-Agent", "GlyphClub-UpdateCheck")
+        .call()
+        .ok()?
+        .body_mut()
+        .read_json()
+        .ok()?;
+    let tag = body.get("tag_name")?.as_str()?;
+    Some(tag.trim_start_matches('v').to_string())
+}
+
+fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = s.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    Some((major, minor, patch))
+}
+
+/// `false` on anything unparsable, not just "not newer" — an unrecognized
+/// version format (a stray non-numeric tag, say) should never show an
+/// update banner for something that might not even be a real newer build.
+fn is_newer_version(candidate: &str, current: &str) -> bool {
+    match (parse_version(candidate), parse_version(current)) {
+        (Some(c), Some(cur)) => c > cur,
+        _ => false,
+    }
+}
+
 /// Reading and parsing a font file the first time any given tile becomes
 /// visible used to happen synchronously, inline in the render/hot path
 /// (`App::preview_family`/`App::glyph_set`, both via `Catalog::font_bytes`)
@@ -659,6 +711,16 @@ pub struct App {
     /// owns the Tags submenu's own open/closed state and its "New Tag…"
     /// inline text field.
     pub font_context_menu: Option<crate::ui::FontContextMenu>,
+
+    /// `Some(version)` once the background check (`check_for_update`,
+    /// kicked off once at startup) finds a newer release than this build
+    /// — drives the dismissible corner banner. `None` both before that
+    /// check finishes and when it finds nothing newer.
+    pub update_available: Option<String>,
+    /// Set when the banner's own close button is clicked — kept separate
+    /// from `update_available` so a stray late-arriving check result
+    /// can't un-dismiss a banner the user already closed this session.
+    pub update_dismissed: bool,
 }
 
 impl App {
@@ -694,6 +756,8 @@ impl App {
             tags,
             tag_font_ids,
             font_context_menu: None,
+            update_available: None,
+            update_dismissed: false,
             preview_cache: HashMap::new(),
             font_prefetch: FontBytesPrefetcher::new(redraw_proxy),
             glyph_sets: HashMap::new(),
