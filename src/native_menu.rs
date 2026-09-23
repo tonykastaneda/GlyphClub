@@ -35,6 +35,7 @@ pub fn suppress_system_edit_menu_items() {
 
 #[derive(Clone, Copy)]
 pub enum MenuAction {
+    CheckForUpdate,
     AddLibrary,
     Sync,
     FindFocus,
@@ -91,12 +92,16 @@ impl NativeMenu {
             }),
         );
         let quit = reg(&mut items, mk("Quit GlyphClub", sup, Code::KeyQ), MenuAction::Quit);
+        let check_update_i =
+            reg(&mut items, MenuItem::new("Check for Updates\u{2026}", true, None), MenuAction::CheckForUpdate);
         let settings_i = reg(&mut items, mk("Settings\u{2026}", sup, Code::Comma), MenuAction::OpenSettings);
         let app_menu = Submenu::with_items(
             "GlyphClub",
             true,
             &[
                 &about,
+                &PredefinedMenuItem::separator(),
+                &check_update_i,
                 &PredefinedMenuItem::separator(),
                 &settings_i,
                 &PredefinedMenuItem::separator(),

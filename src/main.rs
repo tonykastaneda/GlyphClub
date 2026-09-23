@@ -70,9 +70,15 @@ pub(crate) enum AppEvent {
     /// repaint to pick up the now-ready data, not a full `reload_fonts`
     /// (which would also reset `scroll_y`, wrong mid-scroll).
     Redraw,
-    /// The one-shot startup version check (`app::check_for_update`) found
-    /// a newer release than this build — carries its version string.
+    /// The startup or a manual version check (`app::check_for_update`)
+    /// found a newer release than this build — carries its version
+    /// string.
     UpdateAvailable(String),
+    /// A manual check (only — see `app::check_for_update`'s `manual`
+    /// param) found nothing newer.
+    UpdateCheckUpToDate,
+    /// A manual check's own network/parse request failed outright.
+    UpdateCheckFailed,
 }
 
 struct WindowState {
@@ -98,7 +104,7 @@ impl Shell {
             let _ = watcher_proxy.send_event(AppEvent::FoldersChanged);
         })
         .expect("open catalog database");
-        app::check_for_update(proxy.clone());
+        app::check_for_update(proxy.clone(), false);
         Self {
             gpu: Gpu::new(),
             text: TextCx::new(),
@@ -123,6 +129,7 @@ impl Shell {
 fn dispatch_menu_action(app: &mut App, action: native_menu::MenuAction) {
     use native_menu::MenuAction;
     match action {
+        MenuAction::CheckForUpdate => app::check_for_update(app.update_proxy.clone(), true),
         MenuAction::AddLibrary => ui::add_library(app),
         MenuAction::Sync => ui::sync_now(app),
         MenuAction::FindFocus => app.focus = Focus::Search,
@@ -726,6 +733,18 @@ impl ApplicationHandler<AppEvent> for Shell {
             AppEvent::UpdateAvailable(version) => {
                 self.app.update_available = Some(version);
                 self.app.update_dismissed = false;
+                if let Some(state) = &self.state {
+                    state.window.request_redraw();
+                }
+            }
+            AppEvent::UpdateCheckUpToDate => {
+                self.app.status = "You're on the latest version".to_string();
+                if let Some(state) = &self.state {
+                    state.window.request_redraw();
+                }
+            }
+            AppEvent::UpdateCheckFailed => {
+                self.app.status = "Couldn't check for updates".to_string();
                 if let Some(state) = &self.state {
                     state.window.request_redraw();
                 }

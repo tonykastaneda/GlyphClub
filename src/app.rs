@@ -282,18 +282,26 @@ enum Prefetch<T> {
 }
 
 /// Kicks off a one-shot, background version check against the GitHub
-/// releases API — fires `AppEvent::UpdateAvailable(version)` back to the
-/// main thread only if a newer release actually exists, never on a
-/// network failure or when already up to date, so there's nothing for
-/// the event loop to do on the common case but silently receive nothing.
-pub fn check_for_update(proxy: EventLoopProxy<AppEvent>) {
-    std::thread::spawn(move || {
-        let Some(latest) = fetch_latest_release_version() else {
-            return;
-        };
-        if is_newer_version(&latest, env!("CARGO_PKG_VERSION")) {
+/// releases API. The silent startup check (`manual: false`) only ever
+/// fires `AppEvent::UpdateAvailable` if a newer release actually exists —
+/// nothing for the event loop to do on the common case but silently
+/// receive nothing. A manual check (the "Check for Updates…" menu item)
+/// passes `manual: true` instead, which additionally reports back on the
+/// other two outcomes (already up to date, or the check itself failed) —
+/// a user who explicitly asked should always get *some* answer, not
+/// silence that reads the same as "still checking" or "forgot to click".
+pub fn check_for_update(proxy: EventLoopProxy<AppEvent>, manual: bool) {
+    std::thread::spawn(move || match fetch_latest_release_version() {
+        Some(latest) if is_newer_version(&latest, env!("CARGO_PKG_VERSION")) => {
             let _ = proxy.send_event(AppEvent::UpdateAvailable(latest));
         }
+        Some(_) if manual => {
+            let _ = proxy.send_event(AppEvent::UpdateCheckUpToDate);
+        }
+        None if manual => {
+            let _ = proxy.send_event(AppEvent::UpdateCheckFailed);
+        }
+        _ => {}
     });
 }
 
@@ -330,6 +338,31 @@ fn is_newer_version(candidate: &str, current: &str) -> bool {
     match (parse_version(candidate), parse_version(current)) {
         (Some(c), Some(cur)) => c > cur,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod update_check_tests {
+    use super::is_newer_version;
+
+    #[test]
+    fn newer_patch_and_minor_and_major_are_detected() {
+        assert!(is_newer_version("0.1.1", "0.1.0"));
+        assert!(is_newer_version("0.2.0", "0.1.9"));
+        assert!(is_newer_version("1.0.0", "0.9.9"));
+    }
+
+    #[test]
+    fn equal_or_older_is_not_newer() {
+        assert!(!is_newer_version("0.1.0", "0.1.0"));
+        assert!(!is_newer_version("0.1.0", "0.1.1"));
+    }
+
+    #[test]
+    fn unparsable_versions_never_trigger_an_update() {
+        assert!(!is_newer_version("not-a-version", "0.1.0"));
+        assert!(!is_newer_version("0.1.0", "not-a-version"));
+        assert!(!is_newer_version("v1.2", "0.1.0"));
     }
 }
 
@@ -721,6 +754,13 @@ pub struct App {
     /// from `update_available` so a stray late-arriving check result
     /// can't un-dismiss a banner the user already closed this session.
     pub update_dismissed: bool,
+    /// A clone of the same proxy `check_for_update` was first given at
+    /// startup — kept on `App` itself so a manual "Check for Updates…"
+    /// menu click (macOS's native app menu, Windows' hand-rolled File
+    /// menu) can re-trigger the same background check from wherever it's
+    /// wired up, without threading a whole extra proxy parameter through
+    /// every call site in between.
+    pub update_proxy: EventLoopProxy<AppEvent>,
 }
 
 impl App {
@@ -743,6 +783,7 @@ impl App {
         let favorite_ids = catalog.favorite_ids().unwrap_or_default();
         let tags = catalog.list_tags().unwrap_or_default();
         let tag_font_ids = catalog.font_tags().unwrap_or_default();
+        let update_proxy = redraw_proxy.clone();
 
         Self {
             catalog,
@@ -758,6 +799,7 @@ impl App {
             font_context_menu: None,
             update_available: None,
             update_dismissed: false,
+            update_proxy,
             preview_cache: HashMap::new(),
             font_prefetch: FontBytesPrefetcher::new(redraw_proxy),
             glyph_sets: HashMap::new(),

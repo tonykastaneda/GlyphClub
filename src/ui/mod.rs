@@ -99,6 +99,10 @@ pub enum HitAction {
     DismissUpdateBanner,
     /// The update banner's "Download" button.
     OpenUpdateDownload,
+    /// Windows' hand-rolled File menu's "Check for Updates…" item —
+    /// macOS gets the equivalent under its native app menu instead (see
+    /// `native_menu::MenuAction::CheckForUpdate`).
+    CheckForUpdate,
 }
 
 pub struct HitRegion {
@@ -1579,6 +1583,8 @@ fn draw_windows_menu_dropdown(app: &mut App, text: &mut TextCx, scene: &mut Scen
             (Some("Add Library\u{2026}"), true, Some(HitAction::AddFolder)),
             (Some("Sync Now"), true, Some(HitAction::Rescan)),
             (None, true, None),
+            (Some("Check for Updates\u{2026}"), true, Some(HitAction::CheckForUpdate)),
+            (None, true, None),
             (Some("Settings\u{2026}"), true, Some(HitAction::OpenSettings)),
         ],
         WinMenuKind::View => vec![
@@ -2015,6 +2021,10 @@ pub fn handle_click(app: &mut App, point: Point) -> bool {
         }
         HitAction::OpenUpdateDownload => {
             open_latest_release();
+        }
+        HitAction::CheckForUpdate => {
+            app.open_win_menu = None;
+            crate::app::check_for_update(app.update_proxy.clone(), true);
         }
     }
     true
