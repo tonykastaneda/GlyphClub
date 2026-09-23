@@ -2,7 +2,7 @@
 //! — the same operations the old Tauri `commands.rs` exposed over IPC,
 //! called directly in-process now that the UI lives in the same binary.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -379,6 +379,28 @@ impl Catalog {
         let now_favorite = !self.store.favorite_ids()?.contains(&id);
         self.store.set_favorite(id, now_favorite)?;
         Ok(now_favorite)
+    }
+
+    pub fn list_tags(&self) -> Result<Vec<crate::store::Tag>> {
+        self.store.list_tags()
+    }
+
+    pub fn create_tag(&self, name: &str) -> Result<i64> {
+        self.store.create_tag(name)
+    }
+
+    pub fn font_tags(&self) -> Result<HashMap<i64, HashSet<i64>>> {
+        self.store.font_tags()
+    }
+
+    pub fn toggle_font_tag(&mut self, font_id: i64, tag_id: i64) -> Result<bool> {
+        let now_tagged = !self
+            .store
+            .font_tags()?
+            .get(&tag_id)
+            .is_some_and(|ids| ids.contains(&font_id));
+        self.store.set_font_tag(font_id, tag_id, now_tagged)?;
+        Ok(now_tagged)
     }
 
     pub fn font_bytes(&self, id: i64) -> Result<Vec<u8>> {

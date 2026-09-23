@@ -3,7 +3,7 @@ use vello::kurbo::{Affine, BezPath, Cap, Circle, Join, Point, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
 
-use super::{fill_rect, stroke_rect, HitAction, HitRegion};
+use super::{fill_rect, stroke_rect, truncate_to_width, HitAction, HitRegion};
 use crate::app::{App, Filter};
 use crate::text::TextCx;
 use crate::theme;
@@ -122,18 +122,19 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, height: f64) {
         };
         let icon_x = rect.x0 + 11.0;
         draw_nav_icon(scene, filter, icon_x, rect.center().y - 8.0, color);
-        text.draw(scene, label, 14.0, None, color, icon_x + 27.0, y + 12.0);
+        text.draw_centered_v(scene, label, 14.0, None, color, icon_x + 27.0, rect.y0, rect.y1);
         if let Some(n) = count {
             let s = n.to_string();
             let tw = text.measure(&s, 12.0, None);
-            text.draw(
+            text.draw_centered_v(
                 scene,
                 &s,
                 12.0,
                 None,
                 theme::TEXT_TERTIARY(),
                 rect.x1 - 10.0 - tw,
-                y + 11.0,
+                rect.y0,
+                rect.y1,
             );
         }
         app.hit_regions.push(HitRegion {
@@ -161,6 +162,10 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, height: f64) {
     // they're not a folder the user picked — showing (and letting someone
     // remove) them here the same way as a real library would be
     // confusing, so this list stays user-added-libraries only.
+    // Primed once before the loop below borrows `app.folders` — `folder_count`
+    // needs `&mut self` to rebuild its cache, which the loop's own borrow of
+    // `app.folders` wouldn't allow inside it.
+    app.folder_count(0);
     for folder in app.folders.iter().filter(|f| !crate::font::is_system_path(&f.path)) {
         let rect = Rect::new(pad, y, right, y + theme::FOLDER_ROW_H);
         let folder_id = folder.id;
@@ -174,10 +179,31 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, height: f64) {
             .path
             .rsplit(['/', '\\'])
             .find(|s| !s.is_empty())
-            .unwrap_or(&folder.path);
+            .unwrap_or(&folder.path)
+            .to_string();
+        let count = app
+            .folder_count_cache
+            .as_ref()
+            .and_then(|(_, counts)| counts.get(&folder_id))
+            .copied()
+            .unwrap_or(0)
+            .to_string();
+        let count_w = text.measure(&count, 12.0, None);
+        text.draw_centered_v(
+            scene,
+            &count,
+            12.0,
+            None,
+            theme::TEXT_TERTIARY(),
+            rect.x1 - 10.0 - count_w,
+            rect.y0,
+            rect.y1,
+        );
+        let name_max_w = (rect.x1 - 10.0 - count_w - 8.0 - (rect.x0 + 36.0)).max(0.0);
+        let name = truncate_to_width(text, &name, 12.5, None, name_max_w);
         text.draw(
             scene,
-            name,
+            &name,
             12.5,
             None,
             if selected {
@@ -208,31 +234,74 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, height: f64) {
         y += theme::FOLDER_ROW_H;
     }
 
-    // Keep the primary library action fixed to the panel's bottom edge so
-    // it is always available regardless of library count.
-    let add_rect = Rect::new(pad, height - 48.0, right, height - 16.0);
+    // Right under the last library row (not pinned to the panel's bottom
+    // edge any more) — TAGS, below it, reads as its own peer section the
+    // same way LIBRARIES does, rather than "Add Library" sitting between
+    // them like an orphaned leftover row.
+    let add_rect = Rect::new(pad, y, right, y + theme::FOLDER_ROW_H);
     if add_rect.contains(app.hover) {
         fill_rect(scene, add_rect, theme::NAV_HOVER_BG(), 8.0);
     }
-    draw_add_icon(
-        scene,
-        add_rect.x0 + 12.0,
-        add_rect.center().y,
-        theme::TEXT_SECONDARY(),
-    );
-    text.draw(
+    draw_add_icon(scene, add_rect.x0 + 11.0, add_rect.center().y, theme::TEXT_SECONDARY());
+    text.draw_centered_v(
         scene,
         "Add Library",
         13.0,
         None,
         theme::TEXT_SECONDARY(),
         add_rect.x0 + 30.0,
-        add_rect.y0 + 10.0,
+        add_rect.y0,
+        add_rect.y1,
     );
     app.hit_regions.push(HitRegion {
         rect: add_rect,
         action: HitAction::AddFolder,
     });
+    y += theme::FOLDER_ROW_H;
+
+    y += 18.0;
+    text.draw(scene, "TAGS", 10.0, None, theme::TEXT_TERTIARY(), pad + 2.0, y + 7.0);
+    y += 25.0;
+
+    for tag in app.tags.clone() {
+        let rect = Rect::new(pad, y, right, y + theme::FOLDER_ROW_H);
+        let selected = app.filter == Filter::Tag(tag.id);
+        if selected {
+            fill_rect(scene, rect, theme::NAV_SELECTED_BG(), 8.0);
+        } else if rect.contains(app.hover) {
+            fill_rect(scene, rect, theme::NAV_HOVER_BG(), 8.0);
+        }
+        let count = app.tag_font_ids.get(&tag.id).map_or(0, |ids| ids.len()).to_string();
+        let count_w = text.measure(&count, 12.0, None);
+        text.draw_centered_v(scene, &count, 12.0, None, theme::TEXT_TERTIARY(), rect.x1 - 10.0 - count_w, rect.y0, rect.y1);
+        let name_max_w = (rect.x1 - 10.0 - count_w - 8.0 - (rect.x0 + 34.0)).max(0.0);
+        let name = truncate_to_width(text, &tag.name, 12.5, None, name_max_w);
+        text.draw_centered_v(
+            scene,
+            "#",
+            13.0,
+            None,
+            if selected { theme::TEXT() } else { theme::TEXT_SECONDARY() },
+            rect.x0 + 13.0,
+            rect.y0,
+            rect.y1,
+        );
+        text.draw_centered_v(
+            scene,
+            &name,
+            12.5,
+            None,
+            if selected { theme::TEXT() } else { theme::TEXT_SECONDARY() },
+            rect.x0 + 34.0,
+            rect.y0,
+            rect.y1,
+        );
+        app.hit_regions.push(HitRegion {
+            rect,
+            action: HitAction::SelectNav(Filter::Tag(tag.id)),
+        });
+        y += theme::FOLDER_ROW_H;
+    }
 
     if !app.status.is_empty() {
         text.draw(

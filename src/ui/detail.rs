@@ -81,7 +81,7 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1: f6
     let name_row_h = 26.0;
     let star_rect = Rect::new(x1 - pad - 20.0, y, x1 - pad, y + name_row_h);
     let star_color = if favorite { theme::GOLD() } else { theme::TEXT_SECONDARY() };
-    text.draw_centered_v(scene, "\u{2605}", 14.0, None, star_color, star_rect.x0, star_rect.y0, star_rect.y1);
+    super::draw_star_icon(scene, star_rect.x0 + 8.0, (star_rect.y0 + star_rect.y1) / 2.0, 8.0, star_color, favorite);
     app.hit_regions.push(HitRegion {
         rect: star_rect,
         action: HitAction::ToggleDetailFavorite,
@@ -209,6 +209,10 @@ fn draw_preview_tab(app: &mut App, text: &mut TextCx, scene: &mut Scene, id: i64
         let styles = editor.edit_styles();
         styles.insert(parley::StyleProperty::FontSize(size));
         styles.insert(parley::StyleProperty::Brush(vello::peniko::Brush::Solid(theme::TEXT())));
+        // Without this, a run with no break opportunities (e.g. the "A-Z"
+        // preset's unbroken alphabet at a large point size) just overflows
+        // past the content area's right edge instead of wrapping.
+        styles.insert(parley::StyleProperty::OverflowWrap(parley::OverflowWrap::Anywhere));
         // `StyleSet::insert` requires a `'static` `StyleProperty` — `named`
         // itself returns one borrowing `name`, so `.into_owned()` (a small
         // allocation) is what actually makes it storable here.
@@ -615,25 +619,21 @@ fn draw_glyphs_tab(app: &mut App, text: &mut TextCx, scene: &mut Scene, id: i64,
         if search_focused { 1.4 } else { 1.0 },
     );
     if app.glyph_search.is_empty() && !search_focused {
-        text.draw(scene, "Search", 11.5, None, theme::TEXT_TERTIARY(), search_rect.x0 + 10.0, search_rect.y0 + 19.0);
+        text.draw_centered_v(scene, "Search", 11.5, None, theme::TEXT_TERTIARY(), search_rect.x0 + 10.0, search_rect.y0, search_rect.y1);
     } else {
-        text.draw(scene, &app.glyph_search, 11.5, None, theme::TEXT(), search_rect.x0 + 10.0, search_rect.y0 + 19.0);
+        text.draw_centered_v(scene, &app.glyph_search, 11.5, None, theme::TEXT(), search_rect.x0 + 10.0, search_rect.y0, search_rect.y1);
     }
     app.hit_regions.push(HitRegion {
         rect: search_rect,
         action: HitAction::FocusField(Focus::GlyphSearch),
     });
 
-    // The dropdown's own options list, drawn last so it layers over the grid.
-    if app.glyph_block_dropdown_open {
-        draw_glyph_block_dropdown(app, text, scene, dropdown_rect, &codepoints);
-    }
-
     // The grid itself.
     let grid_area = Rect::new(area.x0, area.y0 + header_h + 12.0, area.x1, area.y1);
     let search_filter = app.glyph_search.chars().next();
     let visible: Vec<u32> = codepoints
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|&cp| app.glyph_block_filter.is_none_or(|b| crate::font_info::block_for(cp) == b))
         .filter(|&cp| search_filter.is_none_or(|c| char::from_u32(cp) == Some(c)))
         .collect();
@@ -681,6 +681,11 @@ fn draw_glyphs_tab(app: &mut App, text: &mut TextCx, scene: &mut Scene, id: i64,
 
     app.detail_tab_scroll_max = (content_h - grid_area.height()).max(0.0);
     app.detail_tab_scroll_y = app.detail_tab_scroll_y.clamp(0.0, app.detail_tab_scroll_max);
+
+    // The dropdown's own options list, drawn last so it actually layers over the grid.
+    if app.glyph_block_dropdown_open {
+        draw_glyph_block_dropdown(app, text, scene, dropdown_rect, &codepoints);
+    }
 }
 
 fn draw_glyph_block_dropdown(app: &mut App, text: &mut TextCx, scene: &mut Scene, anchor: Rect, codepoints: &[u32]) {

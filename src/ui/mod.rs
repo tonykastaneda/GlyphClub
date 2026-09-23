@@ -86,6 +86,15 @@ pub enum HitAction {
     ToggleSetting(SettingToggle),
     ToggleAppearanceDropdown,
     SetAppearance(crate::settings::Appearance),
+    /// A font tile/row's right-click menu — opens/closes the Tags submenu.
+    ToggleTagsSubmenu,
+    /// Toggles `tag_id` on `font_id` (the font context menu's own
+    /// `font_id`, not necessarily `App::selected`, though they're the same
+    /// by the time this menu is open — see `handle_right_click`).
+    ToggleFontTag(i64, i64),
+    /// Switches the Tags submenu's "New Tag…" row into its inline text
+    /// field, focused and ready to type.
+    OpenNewTagField,
 }
 
 pub struct HitRegion {
@@ -104,6 +113,24 @@ pub struct ContextMenu {
     /// it — so it starts as an empty rect (nothing is "inside" it) until
     /// then.
     pub panel_rect: Rect,
+}
+
+/// A font tile/row's right-click menu (Activate/Star/Tags/Export/Reveal/
+/// Delete) — see `ui::grid`/`ui::list`'s right-click wiring and
+/// `draw_font_context_menu`.
+pub struct FontContextMenu {
+    pub font_id: i64,
+    pub anchor: Point,
+    /// Same empty-until-first-draw pattern as `ContextMenu::panel_rect`.
+    pub panel_rect: Rect,
+    /// Whether the Tags submenu (opened from the main panel's "Tags" row)
+    /// is showing.
+    pub tags_open: bool,
+    pub tags_panel_rect: Rect,
+    /// `Some(buffer)` while the Tags submenu's "New Tag…" row has been
+    /// switched into its inline text field — `None` otherwise, including
+    /// before it's ever been opened.
+    pub new_tag_text: Option<String>,
 }
 
 pub fn fill_rect(scene: &mut Scene, rect: Rect, color: vello::peniko::Color, radius: f64) {
@@ -193,6 +220,40 @@ pub fn truncate_to_width(text: &mut TextCx, content: &str, size: f32, family: Op
     }
     let prefix: String = chars[..lo].iter().collect();
     format!("{prefix}{ELLIPSIS}")
+}
+
+/// A five-pointed star, outlined when `filled` is false and solid when
+/// true — drawn as a real vector path rather than the Unicode "★"/"☆"
+/// glyphs, which sit at whatever vertical offset the current font's own
+/// metrics happen to give them and don't actually line up with the rest
+/// of a row (badge icon, activation dot, text) the way a hand-drawn icon
+/// centered on `(cx, cy)` does.
+pub fn draw_star_icon(scene: &mut Scene, cx: f64, cy: f64, r: f64, color: vello::peniko::Color, filled: bool) {
+    // A stroked outline reads optically larger than a filled shape at the
+    // same nominal radius — the stroke sits half outside the path, and an
+    // open outline just has more visible edge than a solid one of the same
+    // size. Shrinking the outline star's own radius is what actually makes
+    // the two look the same size next to each other, rather than matching
+    // on paper.
+    let r = if filled { r } else { r * 0.82 };
+    let inner = r * 0.42;
+    let mut path = BezPath::new();
+    for i in 0..10 {
+        let angle = -std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::PI / 5.0;
+        let radius = if i % 2 == 0 { r } else { inner };
+        let point = Point::new(cx + radius * angle.cos(), cy + radius * angle.sin());
+        if i == 0 {
+            path.move_to(point);
+        } else {
+            path.line_to(point);
+        }
+    }
+    path.close_path();
+    if filled {
+        scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &path);
+    } else {
+        scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, color, None, &path);
+    }
 }
 
 /// A circular-arrow refresh glyph — replaces what used to be a bare "R"
@@ -405,6 +466,7 @@ pub fn draw(app: &mut App, text: &mut TextCx, width: f64, height: f64) -> Scene 
     }
 
     draw_context_menu(app, text, &mut scene);
+    draw_font_context_menu(app, text, &mut scene);
 
     if app.settings_open {
         settings::draw(app, text, &mut scene, width, height);
@@ -860,6 +922,219 @@ fn draw_context_menu(app: &mut App, text: &mut TextCx, scene: &mut Scene) {
 
     if let Some(m) = app.context_menu.as_mut() {
         m.panel_rect = panel;
+    }
+}
+
+/// A font tile/row's right-click menu — see `FontContextMenu`. Built from
+/// `App::selected` (set to the right-clicked font by `handle_right_click`
+/// before this ever draws), the same way the Font menu-bar menu's own
+/// enabled/disabled logic already is, so every action here reuses the
+/// exact same `HitAction::*Selected` variants and handlers that menu does.
+fn draw_font_context_menu(app: &mut App, text: &mut TextCx, scene: &mut Scene) {
+    let Some(font_id) = app.font_context_menu.as_ref().map(|m| m.font_id) else {
+        return;
+    };
+    let anchor = app.font_context_menu.as_ref().unwrap().anchor;
+    let is_system = selected_is_system(app, font_id);
+    let is_active = app.active_ids.contains(&font_id);
+    let favorite = app.favorite_ids.contains(&font_id);
+
+    enum Row {
+        Activate(&'static str, vello::peniko::Color, bool, HitAction),
+        Star,
+        Tags,
+        Sep,
+        Item(&'static str, HitAction, bool),
+        Danger(&'static str, HitAction, bool),
+    }
+
+    let rows = [
+        Row::Activate("Activate", theme::GREEN(), !is_system && !is_active, HitAction::ActivateSelected),
+        Row::Activate(
+            "Activate Temporarily",
+            theme::AMBER(),
+            !is_system && !is_active,
+            HitAction::ActivateSelectedTemporarily,
+        ),
+        Row::Activate("Deactivate", theme::DOT_INACTIVE(), !is_system && is_active, HitAction::DeactivateSelected),
+        Row::Sep,
+        Row::Star,
+        Row::Tags,
+        Row::Sep,
+        Row::Item("Export\u{2026}", HitAction::ExportSelectedFont, true),
+        Row::Item(crate::reveal::LABEL, HitAction::RevealSelectedFont, true),
+        Row::Sep,
+        Row::Danger("Delete from Library\u{2026}", HitAction::RequestDeleteSelected, !is_system),
+    ];
+
+    let row_h = 30.0;
+    let sep_h = 9.0;
+    let w = 210.0;
+    let panel_h = 8.0
+        + rows
+            .iter()
+            .map(|r| if matches!(r, Row::Sep) { sep_h } else { row_h })
+            .sum::<f64>();
+    let panel = Rect::new(anchor.x, anchor.y, anchor.x + w, anchor.y + panel_h);
+
+    fill_rect(scene, panel, theme::SIDEBAR_BG(), 10.0);
+    stroke_rect(scene, panel, theme::CONTROL_BORDER(), 10.0, 1.0);
+
+    let mut iy = panel.y0 + 4.0;
+    let mut tags_row_rect = Rect::ZERO;
+    for row in rows {
+        if matches!(row, Row::Sep) {
+            scene.stroke(
+                &Stroke::new(1.0),
+                Affine::IDENTITY,
+                theme::SEPARATOR(),
+                None,
+                &Line::new((panel.x0 + 10.0, iy + sep_h / 2.0), (panel.x1 - 10.0, iy + sep_h / 2.0)),
+            );
+            iy += sep_h;
+            continue;
+        }
+        let rect = Rect::new(panel.x0 + 4.0, iy, panel.x1 - 4.0, iy + row_h);
+        iy += row_h;
+
+        let enabled = match &row {
+            Row::Activate(.., enabled, _) => *enabled,
+            Row::Item(_, _, enabled) | Row::Danger(_, _, enabled) => *enabled,
+            Row::Star | Row::Tags => true,
+            Row::Sep => unreachable!(),
+        };
+        if enabled && rect.contains(app.hover) {
+            fill_rect(scene, rect, theme::NAV_HOVER_BG(), 6.0);
+        }
+        let text_color = |danger: bool| {
+            if !enabled {
+                theme::TEXT_TERTIARY()
+            } else if danger {
+                theme::DANGER()
+            } else {
+                theme::TEXT()
+            }
+        };
+
+        match row {
+            Row::Activate(label, dot_color, enabled, action) => {
+                scene.fill(Fill::NonZero, Affine::IDENTITY, dot_color, None, &Circle::new((rect.x0 + 16.0, rect.center().y), 4.5));
+                text.draw_centered_v(scene, label, 12.5, None, text_color(false), rect.x0 + 32.0, rect.y0, rect.y1);
+                if enabled {
+                    app.hit_regions.push(HitRegion { rect, action });
+                }
+            }
+            Row::Star => {
+                let star_color = if favorite { theme::GOLD() } else { theme::TEXT_SECONDARY() };
+                draw_star_icon(scene, rect.x0 + 16.0, rect.center().y, 6.5, star_color, favorite);
+                text.draw_centered_v(scene, "Star", 12.5, None, theme::TEXT(), rect.x0 + 32.0, rect.y0, rect.y1);
+                app.hit_regions.push(HitRegion { rect, action: HitAction::ToggleFavorite(font_id) });
+            }
+            Row::Tags => {
+                text.draw_centered_v(scene, "#", 12.5, None, theme::TEXT_SECONDARY(), rect.x0 + 12.0, rect.y0, rect.y1);
+                text.draw_centered_v(scene, "Tags", 12.5, None, theme::TEXT(), rect.x0 + 32.0, rect.y0, rect.y1);
+                let mut chevron = BezPath::new();
+                let (cx, cy) = (rect.x1 - 14.0, rect.center().y);
+                chevron.move_to(Point::new(cx - 2.5, cy - 4.0));
+                chevron.line_to(Point::new(cx + 2.0, cy));
+                chevron.line_to(Point::new(cx - 2.5, cy + 4.0));
+                scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, theme::TEXT_SECONDARY(), None, &chevron);
+                app.hit_regions.push(HitRegion { rect, action: HitAction::ToggleTagsSubmenu });
+                tags_row_rect = rect;
+            }
+            Row::Item(label, action, enabled) => {
+                text.draw_centered_v(scene, label, 12.5, None, text_color(false), rect.x0 + 12.0, rect.y0, rect.y1);
+                if enabled {
+                    app.hit_regions.push(HitRegion { rect, action });
+                }
+            }
+            Row::Danger(label, action, enabled) => {
+                text.draw_centered_v(scene, label, 12.5, None, text_color(true), rect.x0 + 12.0, rect.y0, rect.y1);
+                if enabled {
+                    app.hit_regions.push(HitRegion { rect, action });
+                }
+            }
+            Row::Sep => unreachable!(),
+        }
+    }
+
+    let tags_open = app.font_context_menu.as_ref().is_some_and(|m| m.tags_open);
+    if tags_open {
+        draw_tags_submenu(app, text, scene, font_id, Point::new(panel.x1 + 4.0, tags_row_rect.y0));
+    }
+
+    if let Some(m) = app.font_context_menu.as_mut() {
+        m.panel_rect = panel;
+    }
+}
+
+/// The Tags submenu — every existing tag as a checkbox row (checked if
+/// `font_id` currently carries it), plus a trailing "New Tag…" row that
+/// switches into an inline text field (`FontContextMenu::new_tag_text`)
+/// when clicked. Anchored to the right of the main panel's Tags row.
+fn draw_tags_submenu(app: &mut App, text: &mut TextCx, scene: &mut Scene, font_id: i64, anchor: Point) {
+    let row_h = 28.0;
+    let w = 200.0;
+    let tags = app.tags.clone();
+    let new_tag_active = app.font_context_menu.as_ref().is_some_and(|m| m.new_tag_text.is_some());
+    let rows = tags.len() + 1 /* New Tag row */ + if tags.is_empty() { 0 } else { 1 } /* separator */;
+    let panel_h = 8.0 + row_h * rows as f64;
+    let panel = Rect::new(anchor.x, anchor.y, anchor.x + w, anchor.y + panel_h);
+
+    fill_rect(scene, panel, theme::SIDEBAR_BG(), 10.0);
+    stroke_rect(scene, panel, theme::CONTROL_BORDER(), 10.0, 1.0);
+
+    let mut iy = panel.y0 + 4.0;
+    for tag in &tags {
+        let rect = Rect::new(panel.x0 + 4.0, iy, panel.x1 - 4.0, iy + row_h);
+        iy += row_h;
+        if rect.contains(app.hover) {
+            fill_rect(scene, rect, theme::NAV_HOVER_BG(), 6.0);
+        }
+        let checked = app.tag_font_ids.get(&tag.id).is_some_and(|ids| ids.contains(&font_id));
+        if checked {
+            text.draw_centered_v(scene, "\u{2713}", 12.0, None, theme::BRAND_ACCENT(), rect.x0 + 10.0, rect.y0, rect.y1);
+        }
+        let name = truncate_to_width(text, &tag.name, 12.5, None, rect.width() - 34.0);
+        text.draw_centered_v(scene, &name, 12.5, None, theme::TEXT(), rect.x0 + 28.0, rect.y0, rect.y1);
+        app.hit_regions.push(HitRegion { rect, action: HitAction::ToggleFontTag(font_id, tag.id) });
+    }
+
+    if !tags.is_empty() {
+        scene.stroke(
+            &Stroke::new(1.0),
+            Affine::IDENTITY,
+            theme::SEPARATOR(),
+            None,
+            &Line::new((panel.x0 + 10.0, iy + 4.0), (panel.x1 - 10.0, iy + 4.0)),
+        );
+        iy += 9.0;
+    }
+
+    let new_row = Rect::new(panel.x0 + 4.0, iy, panel.x1 - 4.0, iy + row_h);
+    if new_tag_active {
+        fill_rect(scene, new_row.inset(-2.0), theme::CONTROL_BG(), 6.0);
+        stroke_rect(scene, new_row.inset(-2.0), theme::CONTROL_FOCUS(), 6.0, 1.2);
+        let buffer = app
+            .font_context_menu
+            .as_ref()
+            .and_then(|m| m.new_tag_text.as_deref())
+            .unwrap_or("");
+        if buffer.is_empty() {
+            text.draw_centered_v(scene, "Tag name\u{2026}", 12.5, None, theme::TEXT_TERTIARY(), new_row.x0 + 10.0, new_row.y0, new_row.y1);
+        } else {
+            text.draw_centered_v(scene, buffer, 12.5, None, theme::TEXT(), new_row.x0 + 10.0, new_row.y0, new_row.y1);
+        }
+    } else {
+        if new_row.contains(app.hover) {
+            fill_rect(scene, new_row, theme::NAV_HOVER_BG(), 6.0);
+        }
+        text.draw_centered_v(scene, "+ New Tag\u{2026}", 12.5, None, theme::TEXT_SECONDARY(), new_row.x0 + 10.0, new_row.y0, new_row.y1);
+        app.hit_regions.push(HitRegion { rect: new_row, action: HitAction::OpenNewTagField });
+    }
+
+    if let Some(m) = app.font_context_menu.as_mut() {
+        m.tags_panel_rect = panel;
     }
 }
 
@@ -1357,6 +1632,18 @@ pub fn handle_click(app: &mut App, point: Point) -> bool {
         }
     }
 
+    // Same dismiss-on-outside-click pattern, but two panels to check —
+    // the main menu and (while open) its Tags submenu, anchored off to
+    // the side of it — a click inside either keeps the whole thing open.
+    if let Some(menu) = &app.font_context_menu {
+        let inside = menu.panel_rect.contains(point) || (menu.tags_open && menu.tags_panel_rect.contains(point));
+        if !inside {
+            app.font_context_menu = None;
+            app.focus = Focus::None;
+            return true;
+        }
+    }
+
     // Same dismiss-on-outside-click pattern as the folder context menu,
     // above — except a click on the menu bar itself (any label, not just
     // the open one) falls through to the normal hit-region match below
@@ -1382,6 +1669,18 @@ pub fn handle_click(app: &mut App, point: Point) -> bool {
         app.focus = Focus::None;
         return false;
     };
+
+    // A click on any real action in the font context menu closes it — the
+    // three Tags-submenu interactions below are the only ones meant to
+    // leave it open, since more than one tag often gets toggled in a row.
+    if app.font_context_menu.is_some()
+        && !matches!(
+            action,
+            HitAction::ToggleTagsSubmenu | HitAction::ToggleFontTag(..) | HitAction::OpenNewTagField
+        )
+    {
+        app.font_context_menu = None;
+    }
 
     match action {
         HitAction::SelectNav(f) => {
@@ -1623,6 +1922,25 @@ pub fn handle_click(app: &mut App, point: Point) -> bool {
             app.apply_theme();
             app.appearance_dropdown_open = false;
         }
+        HitAction::ToggleTagsSubmenu => {
+            if let Some(m) = app.font_context_menu.as_mut() {
+                m.tags_open = !m.tags_open;
+                m.new_tag_text = None;
+            }
+            app.focus = Focus::None;
+        }
+        HitAction::ToggleFontTag(font_id, tag_id) => {
+            let (font_id, tag_id) = (*font_id, *tag_id);
+            if app.catalog.toggle_font_tag(font_id, tag_id).is_ok() {
+                app.reload_tags();
+            }
+        }
+        HitAction::OpenNewTagField => {
+            if let Some(m) = app.font_context_menu.as_mut() {
+                m.new_tag_text = Some(String::new());
+            }
+            app.focus = Focus::NewTag;
+        }
     }
     true
 }
@@ -1714,16 +2032,50 @@ pub fn finish_header_interaction(app: &mut App) {
 /// Right-clicking a library row opens its menu; right-clicking anywhere
 /// else closes whatever menu is open, same as a left click would.
 pub fn handle_right_click(app: &mut App, point: Point) {
-    let hit = app
+    let folder_hit = app
         .folder_rows
         .iter()
         .find(|(_, rect)| rect.contains(point))
         .map(|(id, _)| *id);
-    app.context_menu = hit.map(|folder_id| ContextMenu {
-        folder_id,
-        anchor: point,
-        panel_rect: Rect::new(0.0, 0.0, 0.0, 0.0),
+    if let Some(folder_id) = folder_hit {
+        app.context_menu = Some(ContextMenu {
+            folder_id,
+            anchor: point,
+            panel_rect: Rect::ZERO,
+        });
+        app.font_context_menu = None;
+        return;
+    }
+
+    // A font tile/row's whole-area `SelectFont` region always covers
+    // wherever the right-click landed on it — same region left-click
+    // selection already uses — so no separate per-tile rect list is
+    // needed just to answer "which font was this".
+    let font_hit = app.hit_regions.iter().rev().find_map(|r| {
+        if !r.rect.contains(point) {
+            return None;
+        }
+        match r.action {
+            HitAction::SelectFont(id) => Some(id),
+            _ => None,
+        }
     });
+    if let Some(font_id) = font_hit {
+        app.selected = Some(font_id);
+        app.font_context_menu = Some(FontContextMenu {
+            font_id,
+            anchor: point,
+            panel_rect: Rect::ZERO,
+            tags_open: false,
+            tags_panel_rect: Rect::ZERO,
+            new_tag_text: None,
+        });
+        app.context_menu = None;
+        return;
+    }
+
+    app.context_menu = None;
+    app.font_context_menu = None;
 }
 
 /// Maps a pointer position on the rendered type-size track to a tile size.
@@ -1788,6 +2140,34 @@ pub fn toggle_favorite(app: &mut App, id: i64) {
         }
         app.favorites_version += 1;
     }
+}
+
+/// Commits the Tags submenu's "New Tag…" field — creates the tag (or
+/// reuses one of the same name, since `Store::create_tag` is `INSERT OR
+/// IGNORE`), applies it to the menu's own font, and drops back to the
+/// submenu's normal tag list. A blank/whitespace-only name is a no-op,
+/// same as every other empty-input-does-nothing field in this app.
+pub fn confirm_new_tag(app: &mut App) {
+    let Some(font_id) = app.font_context_menu.as_ref().map(|m| m.font_id) else {
+        return;
+    };
+    let name = app
+        .font_context_menu
+        .as_ref()
+        .and_then(|m| m.new_tag_text.as_deref())
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    if !name.is_empty() {
+        if let Ok(tag_id) = app.catalog.create_tag(&name) {
+            let _ = app.catalog.toggle_font_tag(font_id, tag_id);
+            app.reload_tags();
+        }
+    }
+    if let Some(m) = app.font_context_menu.as_mut() {
+        m.new_tag_text = None;
+    }
+    app.focus = Focus::None;
 }
 
 /// The "Add Library" flow — a folder picker, then indexing whatever it

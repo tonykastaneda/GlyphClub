@@ -12,6 +12,12 @@ pub struct Folder {
     pub path: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct Tag {
+    pub id: i64,
+    pub name: String,
+}
+
 /// One font face as read back from the catalog, including the id needed to
 /// reference it (e.g. when the UI asks to load its bytes for a live preview)
 /// and the folder it was scanned from, for the sidebar's per-library filter.
@@ -67,6 +73,18 @@ impl Store {
             CREATE TABLE IF NOT EXISTS favorites (
                 font_id INTEGER PRIMARY KEY REFERENCES fonts(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS tags (
+                id   INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE
+            );
+
+            CREATE TABLE IF NOT EXISTS font_tags (
+                font_id INTEGER NOT NULL REFERENCES fonts(id) ON DELETE CASCADE,
+                tag_id  INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                PRIMARY KEY (font_id, tag_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_font_tags_tag ON font_tags(tag_id);
 
             -- File paths removed via Font > Remove from Fontlist (or the
             -- hand-rolled Windows equivalent) -- the file itself is
@@ -306,6 +324,56 @@ impl Store {
         } else {
             self.conn
                 .execute("DELETE FROM favorites WHERE font_id = ?1", [font_id])?;
+        }
+        Ok(())
+    }
+
+    pub fn list_tags(&self) -> Result<Vec<Tag>> {
+        let mut stmt = self.conn.prepare("SELECT id, name FROM tags ORDER BY name")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(Tag {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn create_tag(&self, name: &str) -> Result<i64> {
+        self.conn
+            .execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", [name])?;
+        let id: i64 = self
+            .conn
+            .query_row("SELECT id FROM tags WHERE name = ?1", [name], |row| row.get(0))?;
+        Ok(id)
+    }
+
+    /// Every tag's current font membership in one pass — `tag_id -> font
+    /// ids` — rather than a query per tag per sidebar/menu draw.
+    pub fn font_tags(&self) -> Result<HashMap<i64, HashSet<i64>>> {
+        let mut stmt = self.conn.prepare("SELECT tag_id, font_id FROM font_tags")?;
+        let mut map: HashMap<i64, HashSet<i64>> = HashMap::new();
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
+        for row in rows {
+            let (tag_id, font_id) = row?;
+            map.entry(tag_id).or_default().insert(font_id);
+        }
+        Ok(map)
+    }
+
+    pub fn set_font_tag(&self, font_id: i64, tag_id: i64, tagged: bool) -> Result<()> {
+        if tagged {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO font_tags (font_id, tag_id) VALUES (?1, ?2)",
+                [font_id, tag_id],
+            )?;
+        } else {
+            self.conn.execute(
+                "DELETE FROM font_tags WHERE font_id = ?1 AND tag_id = ?2",
+                [font_id, tag_id],
+            )?;
         }
         Ok(())
     }

@@ -146,6 +146,10 @@ fn focused_string(app: &mut App) -> Option<&mut String> {
         Focus::SampleText => Some(&mut app.sample_text),
         Focus::GlyphSearch => Some(&mut app.glyph_search),
         Focus::PreviewSize => Some(&mut app.preview_size_input),
+        // Handled separately in `handle_key`, same as `PreviewText` — it
+        // lives inside `Option<FontContextMenu>`, not a plain field this
+        // generic accessor can hand back a `&mut String` for.
+        Focus::NewTag => None,
         Focus::None => None,
     }
 }
@@ -188,6 +192,37 @@ fn handle_key(app: &mut App, text: &mut TextCx, event: winit::event::KeyEvent, m
         }
     }
     if app.focus == Focus::None {
+        return;
+    }
+
+    // The Tags submenu's "New Tag…" field — Enter commits it (creates and
+    // applies the tag), unlike every other field's Enter, which just
+    // defocuses. Handled before the generic dispatch below for the same
+    // reason `PreviewText` is.
+    if app.focus == Focus::NewTag {
+        match event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                if let Some(m) = app.font_context_menu.as_mut() {
+                    m.new_tag_text = None;
+                }
+                app.focus = Focus::None;
+            }
+            Key::Named(NamedKey::Enter) => ui::confirm_new_tag(app),
+            Key::Named(NamedKey::Backspace) => {
+                if let Some(s) = app.font_context_menu.as_mut().and_then(|m| m.new_tag_text.as_mut()) {
+                    s.pop();
+                }
+            }
+            _ => {
+                if let Some(txt) = event.text {
+                    if let Some(s) = app.font_context_menu.as_mut().and_then(|m| m.new_tag_text.as_mut()) {
+                        for ch in txt.chars().filter(|c| !c.is_control()) {
+                            s.push(ch);
+                        }
+                    }
+                }
+            }
+        }
         return;
     }
 
@@ -496,7 +531,16 @@ impl ApplicationHandler<AppEvent> for Shell {
                     // window from empty background" by hand instead, the
                     // same way a native titlebar would.
                     if !ui::handle_click(&mut self.app, self.cursor) {
-                        let _ = state.window.drag_window();
+                        let result = state.window.drag_window();
+                        eprintln!(
+                            "[drag] BACKGROUND click -> drag_window() cursor={:?} detail_open={} selected={:?} result={:?}",
+                            self.cursor, self.app.detail_open, self.app.selected, result
+                        );
+                    } else {
+                        eprintln!(
+                            "[drag] CONSUMED cursor={:?} detail_open={} focus={:?}",
+                            self.cursor, self.app.detail_open, self.app.focus
+                        );
                     }
                 }
                 #[cfg(not(target_os = "macos"))]

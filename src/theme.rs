@@ -29,6 +29,7 @@ struct Palette {
     tile_border: Color,
     brand_accent: Color,
     green: Color,
+    amber: Color,
     gold: Color,
     text: Color,
     text_secondary: Color,
@@ -54,6 +55,7 @@ const DARK: Palette = Palette {
     tile_border: Color::from_rgba8(0xff, 0xff, 0xff, 0x24),
     brand_accent: Color::from_rgb8(0x9a, 0xff, 0x00),
     green: Color::from_rgb8(0x30, 0xd1, 0x58),
+    amber: Color::from_rgb8(0xff, 0x9f, 0x0a),
     gold: Color::from_rgb8(0xff, 0xd6, 0x0a),
     text: Color::from_rgb8(0xf5, 0xf5, 0xf7),
     text_secondary: Color::from_rgb8(0xc3, 0xc3, 0xc8),
@@ -89,6 +91,7 @@ const LIGHT: Palette = Palette {
     tile_border: Color::from_rgba8(0x00, 0x00, 0x00, 0x18),
     brand_accent: Color::from_rgb8(0x5c, 0x8a, 0x00),
     green: Color::from_rgb8(0x30, 0xd1, 0x58),
+    amber: Color::from_rgb8(0xff, 0x9f, 0x0a),
     gold: Color::from_rgb8(0xff, 0xd6, 0x0a),
     text: Color::from_rgb8(0x1c, 0x1c, 0x1e),
     text_secondary: Color::from_rgb8(0x48, 0x48, 0x4a),
@@ -153,6 +156,9 @@ pub fn BRAND_ACCENT() -> Color {
 }
 pub fn GREEN() -> Color {
     current().green
+}
+pub fn AMBER() -> Color {
+    current().amber
 }
 pub fn GOLD() -> Color {
     current().gold

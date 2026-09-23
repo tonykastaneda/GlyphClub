@@ -2,7 +2,7 @@ use vello::kurbo::{Affine, Circle, Point, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
 
-use super::{draw_format_badge, fill_rect, stroke_rect, truncate_to_width, HitAction, HitRegion};
+use super::{draw_format_badge, draw_star_icon, fill_rect, stroke_rect, truncate_to_width, HitAction, HitRegion};
 use crate::app::{App, VisibleIdsCacheKey};
 use crate::text::TextCx;
 use crate::theme;
@@ -140,6 +140,15 @@ fn draw_tile(
     let selected = app.selected == Some(id);
     let active = app.active_ids.contains(&id) || is_system;
 
+    // Pushed first (not last) so the smaller dot/star regions below, added
+    // after it, actually win the reverse-order lookup `handle_click` does —
+    // a region pushed later always wins a tie over one pushed earlier, so
+    // this broad whole-tile region has to be the *first* one in, not last.
+    app.hit_regions.push(HitRegion {
+        rect: tile_rect,
+        action: HitAction::SelectFont(id),
+    });
+
     let border = if selected {
         theme::BRAND_ACCENT()
     } else {
@@ -203,10 +212,30 @@ fn draw_tile(
             theme::TEXT_TERTIARY(),
         );
         let name_x = x + 32.0 + if badge_w > 0.0 { badge_w + 6.0 } else { 0.0 };
-        let name_max_w = (x + size - 12.0 - name_x).max(0.0);
+        // Reserved unconditionally (not just when the star is actually
+        // showing) so the name doesn't reflow/truncate differently the
+        // instant the tile is hovered.
+        let name_max_w = (x + size - 34.0 - name_x).max(0.0);
         let fam = truncate_to_width(text, &fam, 12.0, None, name_max_w);
         text.draw_centered_v(scene, &fam, 12.0, None, theme::TEXT(), name_x, y + 10.0, y + 28.0);
         let _ = sub;
+
+        // Star toggle, top-right — shown on hover, or always once
+        // favorited so the tile still reflects that state at a glance.
+        // Centered on the same y+19 line the activation dot and badge/name
+        // row are centered on, so all four actually line up.
+        let favorite = app.favorite_ids.contains(&id);
+        let star_cx = x + size - 19.0;
+        let star_cy = y + 19.0;
+        let star_rect = Rect::new(star_cx - 11.0, star_cy - 11.0, star_cx + 11.0, star_cy + 11.0);
+        if favorite || tile_rect.contains(app.hover) {
+            let star_color = if favorite { theme::GOLD() } else { theme::TEXT_SECONDARY() };
+            draw_star_icon(scene, star_cx, star_cy, 6.0, star_color, favorite);
+            app.hit_regions.push(HitRegion {
+                rect: star_rect,
+                action: HitAction::ToggleFavorite(id),
+            });
+        }
     }
 
     // Activation dot, top-left.
@@ -232,13 +261,6 @@ fn draw_tile(
         });
     }
 
-    // Whole-tile click selects it (added last among this tile's regions but
-    // before later tiles, so the dot/star rects above still win — they're
-    // checked in reverse draw order and are smaller and drawn after).
-    app.hit_regions.push(HitRegion {
-        rect: tile_rect,
-        action: HitAction::SelectFont(id),
-    });
 }
 
 /// A thin draggable thumb on the content area's right edge — hidden

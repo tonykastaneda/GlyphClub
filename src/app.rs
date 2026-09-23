@@ -155,6 +155,7 @@ pub enum Filter {
     /// catalog" timestamp of its own.
     Recent,
     Folder(i64),
+    Tag(i64),
 }
 
 /// How far back "Recent" reaches.
@@ -180,7 +181,7 @@ pub enum WinMenuKind {
     Help,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Focus {
     None,
     Search,
@@ -195,6 +196,9 @@ pub enum Focus {
     /// text while focused, parsed into `app.preview_size` on every valid
     /// keystroke (see `ui::detail::draw_preview_tab`).
     PreviewSize,
+    /// The font context menu's "New Tag…" inline field (`FontContextMenu::
+    /// new_tag_text`) — see `ui::mod::FontContextMenu`.
+    NewTag,
 }
 
 /// The Preview tab's text-alignment control — see `ui::detail`.
@@ -601,6 +605,10 @@ pub struct App {
     /// changes rather than rescanning all of `entries` every frame the
     /// sidebar draws (i.e. always, since it's on-screen continuously).
     pub starred_count_cache: Option<(u64, u64, usize)>,
+    /// `ui::sidebar`'s per-library font counts — `(entries_version, counts)`,
+    /// a single pass over `entries` rather than one filter-and-count pass
+    /// per folder row every frame (same reasoning as `starred_count_cache`).
+    pub folder_count_cache: Option<(u64, std::collections::HashMap<i64, usize>)>,
 
     /// A mouse-down on a column header, not yet resolved as a click (sort)
     /// or a drag (reorder) — `(column index, press point)`. Promoted to
@@ -637,6 +645,20 @@ pub struct App {
     pub win_menu_panel_rect: Rect,
 
     pub hit_regions: Vec<HitRegion>,
+
+    /// Every tag that exists, for the sidebar's TAGS section and the font
+    /// context menu's Tags submenu — loaded at startup and refreshed by
+    /// `reload_tags` after any tag create/delete/assign.
+    pub tags: Vec<crate::store::Tag>,
+    /// `tag_id -> font ids currently carrying it` — one pass over
+    /// `font_tags` (see `Store::font_tags`) rather than a query per tag
+    /// per sidebar/menu draw, same reasoning as `favorite_ids`.
+    pub tag_font_ids: HashMap<i64, HashSet<i64>>,
+    /// A font tile/row's right-click menu — `None` when closed. Separate
+    /// from `context_menu` (which is folder-row-only) since this one also
+    /// owns the Tags submenu's own open/closed state and its "New Tag…"
+    /// inline text field.
+    pub font_context_menu: Option<crate::ui::FontContextMenu>,
 }
 
 impl App {
@@ -657,6 +679,8 @@ impl App {
                 .map(|entry| entry.id),
         );
         let favorite_ids = catalog.favorite_ids().unwrap_or_default();
+        let tags = catalog.list_tags().unwrap_or_default();
+        let tag_font_ids = catalog.font_tags().unwrap_or_default();
 
         Self {
             catalog,
@@ -667,6 +691,9 @@ impl App {
             favorites_version: 0,
             active_ids,
             favorite_ids,
+            tags,
+            tag_font_ids,
+            font_context_menu: None,
             preview_cache: HashMap::new(),
             font_prefetch: FontBytesPrefetcher::new(redraw_proxy),
             glyph_sets: HashMap::new(),
@@ -677,16 +704,16 @@ impl App {
             selected: None,
             sample_text: "Aa".to_string(),
             preview_editor: {
-                let mut editor = PlainEditor::new(30.0);
-                editor.set_text("The quick brown fox jumps over the lazy dog 0123456789");
+                let mut editor = PlainEditor::new(72.0);
+                editor.set_text("ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789");
                 editor
             },
             preview_content_rect: None,
             dragging_preview_selection: false,
             pending_preview_preset: None,
-            preview_align: TextAlign::Left,
-            preview_size: 30.0,
-            preview_size_input: "30".to_string(),
+            preview_align: TextAlign::Center,
+            preview_size: 72.0,
+            preview_size_input: "72".to_string(),
             preview_preset_open: false,
             preview_size_dropdown_open: false,
             scroll_y: 0.0,
@@ -734,6 +761,7 @@ impl App {
             list_groups_cache: None,
             visible_ids_cache: None,
             starred_count_cache: None,
+            folder_count_cache: None,
             header_press: None,
             dragging_column_reorder: None,
             column_reorder_target: None,
@@ -762,6 +790,11 @@ impl App {
                 self.entries.iter().filter(|e| e.mtime >= cutoff).collect()
             }
             Filter::Folder(id) => self.entries.iter().filter(|e| e.folder_id == id).collect(),
+            Filter::Tag(id) => {
+                let empty = HashSet::new();
+                let font_ids = self.tag_font_ids.get(&id).unwrap_or(&empty);
+                self.entries.iter().filter(|e| font_ids.contains(&e.id)).collect()
+            }
         }
     }
 
@@ -780,6 +813,20 @@ impl App {
             .count();
         self.starred_count_cache = Some((self.entries_version, self.favorites_version, count));
         count
+    }
+
+    /// Font count for one library folder, from the shared per-folder
+    /// count map (see `folder_count_cache`), rebuilding it first if
+    /// `entries` has changed since the last call.
+    pub fn folder_count(&mut self, folder_id: i64) -> usize {
+        if self.folder_count_cache.as_ref().is_none_or(|(ev, _)| *ev != self.entries_version) {
+            let mut counts = std::collections::HashMap::new();
+            for e in &self.entries {
+                *counts.entry(e.folder_id).or_insert(0usize) += 1;
+            }
+            self.folder_count_cache = Some((self.entries_version, counts));
+        }
+        self.folder_count_cache.as_ref().and_then(|(_, counts)| counts.get(&folder_id)).copied().unwrap_or(0)
     }
 
     /// O(1) id -> entry, via `entries_by_id` — the one lookup every other
@@ -809,6 +856,14 @@ impl App {
         );
         self.favorite_ids = self.catalog.favorite_ids().unwrap_or_default();
         self.favorites_version += 1;
+    }
+
+    /// Re-reads `tags`/`tag_font_ids` from the catalog — called after any
+    /// tag create or a font's tag assignment changes, same pattern as
+    /// `favorite_ids` above.
+    pub fn reload_tags(&mut self) {
+        self.tags = self.catalog.list_tags().unwrap_or_default();
+        self.tag_font_ids = self.catalog.font_tags().unwrap_or_default();
     }
 
     /// Pushes `settings.appearance` (resolved against `system_is_dark` for
