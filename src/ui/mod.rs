@@ -1,3 +1,4 @@
+mod about;
 mod detail;
 mod grid;
 mod list;
@@ -83,6 +84,14 @@ pub enum HitAction {
     /// The close button, or a click on the dimmed backdrop outside the
     /// panel — see `ui::settings::draw`.
     CloseSettings,
+    /// Opens the About overlay — see `ui::about`. Reachable from the
+    /// hand-rolled Windows Help menu; macOS's native app-menu "About
+    /// GlyphClub" item goes through `native_menu::MenuAction::OpenAbout`
+    /// instead, set directly rather than via a `HitRegion` click.
+    OpenAbout,
+    /// The Close button, or a click on the dimmed backdrop outside the
+    /// panel — see `ui::about::draw`.
+    CloseAbout,
     ToggleSetting(SettingToggle),
     ToggleAppearanceDropdown,
     SetAppearance(crate::settings::Appearance),
@@ -480,6 +489,10 @@ pub fn draw(app: &mut App, text: &mut TextCx, width: f64, height: f64) -> Scene 
 
     if app.settings_open {
         settings::draw(app, text, &mut scene, width, height);
+    }
+
+    if app.about_open {
+        about::draw(app, text, &mut scene, width, height);
     }
 
     draw_update_banner(app, text, &mut scene, width, height);
@@ -1629,7 +1642,11 @@ fn draw_windows_menu_dropdown(app: &mut App, text: &mut TextCx, scene: &mut Scen
                 Some(HitAction::RequestDeleteSelected),
             ),
         ],
-        WinMenuKind::Help => vec![(Some("GlyphClub on GitHub"), true, Some(HitAction::OpenGitHub))],
+        WinMenuKind::Help => vec![
+            (Some("About GlyphClub"), true, Some(HitAction::OpenAbout)),
+            (None, true, None),
+            (Some("GlyphClub on GitHub"), true, Some(HitAction::OpenGitHub)),
+        ],
     };
 
     let row_h = 28.0;
@@ -1984,6 +2001,13 @@ pub fn handle_click(app: &mut App, point: Point) -> bool {
         }
         HitAction::CloseSettings => {
             app.settings_open = false;
+        }
+        HitAction::OpenAbout => {
+            app.open_win_menu = None;
+            app.about_open = true;
+        }
+        HitAction::CloseAbout => {
+            app.about_open = false;
         }
         HitAction::ToggleSetting(which) => {
             settings::apply_toggle(app, *which);

@@ -14,7 +14,7 @@
 //! drain at all.
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
-use muda::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use muda::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use objc2_foundation::{NSString, NSUserDefaults};
 
 use crate::app::ViewMode;
@@ -35,6 +35,7 @@ pub fn suppress_system_edit_menu_items() {
 
 #[derive(Clone, Copy)]
 pub enum MenuAction {
+    OpenAbout,
     CheckForUpdate,
     AddLibrary,
     Sync,
@@ -83,14 +84,11 @@ impl NativeMenu {
             item
         }
 
-        let about = PredefinedMenuItem::about(
-            Some("About GlyphClub"),
-            Some(AboutMetadata {
-                name: Some("GlyphClub".to_string()),
-                version: Some(env!("CARGO_PKG_VERSION").to_string()),
-                ..Default::default()
-            }),
-        );
+        // A regular, `reg`'d item rather than `PredefinedMenuItem::about` —
+        // opens our own in-app overlay (`ui::about`, consistent with how
+        // Settings does modals here) instead of the native macOS About
+        // panel.
+        let about_i = reg(&mut items, MenuItem::new("About GlyphClub", true, None), MenuAction::OpenAbout);
         let quit = reg(&mut items, mk("Quit GlyphClub", sup, Code::KeyQ), MenuAction::Quit);
         let check_update_i =
             reg(&mut items, MenuItem::new("Check for Updates\u{2026}", true, None), MenuAction::CheckForUpdate);
@@ -99,7 +97,7 @@ impl NativeMenu {
             "GlyphClub",
             true,
             &[
-                &about,
+                &about_i,
                 &PredefinedMenuItem::separator(),
                 &check_update_i,
                 &PredefinedMenuItem::separator(),

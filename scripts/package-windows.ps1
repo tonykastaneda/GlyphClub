@@ -15,6 +15,13 @@ $Version = if ($env:VERSION) { $env:VERSION } else {
 }
 
 Write-Host "==> Building release ($Version)"
+# Stamps the crate's own version to match — otherwise `env!("CARGO_PKG_VERSION")`
+# (what the in-app About overlay, Settings, and the update-checker's version
+# comparison all read) stays whatever Cargo.toml last had it at, and every
+# release would need a separate manual Cargo.toml edit+commit to keep it in
+# sync with the tag actually being built. No-op when $Version already
+# matches Cargo.toml (a local run with no $env:VERSION override).
+(Get-Content Cargo.toml) -replace '^version = ".*"', "version = `"$Version`"" | Set-Content Cargo.toml
 cargo build --release
 
 $StageDir = "target/package/windows"

@@ -129,6 +129,7 @@ impl Shell {
 fn dispatch_menu_action(app: &mut App, action: native_menu::MenuAction) {
     use native_menu::MenuAction;
     match action {
+        MenuAction::OpenAbout => app.about_open = true,
         MenuAction::CheckForUpdate => app::check_for_update(app.update_proxy.clone(), true),
         MenuAction::AddLibrary => ui::add_library(app),
         MenuAction::Sync => ui::sync_now(app),

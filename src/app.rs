@@ -652,6 +652,8 @@ pub struct App {
     /// UI-present-but-not-yet-wired-to-the-OS.
     pub settings: Settings,
     pub settings_open: bool,
+    /// The About overlay — see `ui::about::draw`.
+    pub about_open: bool,
     /// The Appearance dropdown's open/closed state — same pattern as
     /// `glyph_block_dropdown_open`.
     pub appearance_dropdown_open: bool,
@@ -850,6 +852,7 @@ impl App {
             confirm_delete: None,
             settings: Settings::load(),
             settings_open: false,
+            about_open: false,
             appearance_dropdown_open: false,
             // Overwritten as soon as `resumed()` has a real `Window` to
             // ask via `Window::theme()` — this initial guess only matters

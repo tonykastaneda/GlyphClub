@@ -23,6 +23,13 @@ STAGE_DIR="target/package/macos"
 APP_BUNDLE="$STAGE_DIR/$APP_NAME.app"
 
 echo "==> Building release ($VERSION)"
+# Stamps the crate's own version to match — otherwise `env!("CARGO_PKG_VERSION")`
+# (what the in-app About overlay, Settings, and the update-checker's version
+# comparison all read) stays whatever Cargo.toml last had it at, and every
+# release would need a separate manual Cargo.toml edit+commit to keep it in
+# sync with the tag actually being built. No-op when $VERSION already
+# matches Cargo.toml (a local run with no $VERSION override).
+sed -i.bak -E "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml && rm -f Cargo.toml.bak
 rustup target add aarch64-apple-darwin >/dev/null 2>&1 || true
 cargo build --release --target aarch64-apple-darwin
 
