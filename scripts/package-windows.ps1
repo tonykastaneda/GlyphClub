@@ -18,7 +18,10 @@ Write-Host "==> Building release ($Version)"
 cargo build --release
 
 $StageDir = "target/package/windows"
-$ZipName = "GlyphClub-$Version-Windows.zip"
+# Deliberately not version-suffixed — the docs site's download button links
+# straight to releases/latest/download/GlyphClub-Windows.zip, which only
+# resolves if every release publishes an asset under this exact same name.
+$ZipName = "GlyphClub-Windows.zip"
 Remove-Item -Recurse -Force $StageDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
 Copy-Item "target/release/GlyphClub.exe" "$StageDir/GlyphClub.exe"

@@ -41,7 +41,10 @@ codesign --force --deep --options runtime --timestamp \
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
 echo "==> Building DMG"
-DMG_PATH="$STAGE_DIR/$APP_NAME-$VERSION.dmg"
+# Deliberately not version-suffixed — the docs site's download button links
+# straight to releases/latest/download/GlyphClub.dmg, which only resolves
+# if every release publishes an asset under this exact same name.
+DMG_PATH="$STAGE_DIR/$APP_NAME.dmg"
 rm -f "$DMG_PATH"
 if command -v create-dmg >/dev/null 2>&1; then
   create-dmg \
