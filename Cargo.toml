@@ -64,5 +64,13 @@ objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSData", "NSUse
 # platform has its own separate menu plan.
 muda = "0.19"
 
+[target.'cfg(windows)'.build-dependencies]
+# Embeds branding/windows/GlyphClub.ico into the built .exe itself (see
+# build.rs) — distinct from the runtime taskbar/title-bar icon `image`
+# already sets from the PNG (above): without this, the .exe file shown in
+# Explorer/the taskbar before the app is even running has no icon of its
+# own.
+winres = "0.1"
+
 [dev-dependencies]
 tempfile = "3"

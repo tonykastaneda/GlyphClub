@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Intentionally empty: not sandboxed, since this isn't a Mac App
+	     Store build and the app's whole job is reading and writing
+	     arbitrary user chosen library folders a sandbox would otherwise
+	     block. Hardened runtime is enabled at sign time instead (see
+	     scripts/package-macos.sh), and that plus notarization is what
+	     actually satisfies Gatekeeper for a Developer ID build like this,
+	     independent of sandboxing. -->
+</dict>
+</plist>

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>GlyphClub</string>
+	<key>CFBundleDisplayName</key>
+	<string>GlyphClub</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.tonykastaneda.glyphclub</string>
+	<key>CFBundleExecutable</key>
+	<string>GlyphClub</string>
+	<key>CFBundleIconFile</key>
+	<string>GlyphClub.icns</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<!-- Substituted at package time (see scripts/package-macos.sh) from the
+	     git tag/Cargo.toml version, not hardcoded here. -->
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>12.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Tony Castaneda</string>
+	<!-- winit needs this to run without a Dock icon flicker at launch and
+	     to behave as a normal foreground app; explicit rather than relying
+	     on the (also true) default, since a hand-assembled bundle like
+	     this one has no Xcode project filling it in implicitly. -->
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.graphics-design</string>
+</dict>
+</plist>

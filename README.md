@@ -46,6 +46,37 @@ executable's own filename is what macOS's menu bar falls back to for the
 bold application-menu title (there's no `.app` bundle/`Info.plist` yet to
 pull a display name from otherwise).
 
+## Releasing
+
+Pushing a tag like `v0.1.0` runs `.github/workflows/release.yml`, which
+builds, signs, and notarizes a macOS DMG (Apple Silicon only) and builds a
+Windows zip (unsigned — no code-signing cert yet, so SmartScreen will warn
+on first run until one's added), then opens a draft GitHub Release with
+both attached. `scripts/package-macos.sh`/`scripts/package-windows.ps1` are
+the actual build/package logic; the workflow is mostly just credentials
+plumbing around them, and `package-macos.sh` also works standalone for a
+local build (it'll use a `notarytool` keychain profile instead of the CI
+API-key path — see below).
+
+**One-time setup**, before the workflow can actually sign/notarize —
+add these six as this repo's Settings → Secrets and variables → Actions →
+Repository secrets:
+
+| Secret | Where it comes from |
+| --- | --- |
+| `APPLE_SIGN_IDENTITY` | The exact string from `security find-identity -v -p codesigning`, e.g. `Developer ID Application: Your Name (TEAMID)`. |
+| `MACOS_CERTIFICATE_P12_BASE64` | Export that identity (cert + private key) from Keychain Access as a `.p12`, then `base64 -i cert.p12 \| pbcopy`. |
+| `MACOS_CERTIFICATE_PASSWORD` | Whatever password you set when exporting the `.p12` above. |
+| `APPLE_API_KEY_BASE64` | An App Store Connect API key's `.p8` file (Users and Access → Integrations → App Store Connect API), `base64 -i AuthKey_XXXX.p8 \| pbcopy`. |
+| `APPLE_API_KEY_ID` | The Key ID shown next to that API key. |
+| `APPLE_API_ISSUER_ID` | The Issuer ID shown at the top of the same Integrations page. |
+
+For a local (non-CI) run of `./scripts/package-macos.sh` instead, skip the
+API key entirely and just run
+`xcrun notarytool store-credentials glyphclub-notary` once — it'll prompt
+for the same Apple ID/API key info and stash it in your keychain under
+that profile name, which the script uses by default.
+
 ## Project layout
 
 - `src/` — the application itself: `app.rs` holds shared state, `ui/` is
