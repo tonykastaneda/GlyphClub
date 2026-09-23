@@ -1,3 +1,11 @@
+// Rust binaries default to Windows' "console" subsystem, which pops a
+// terminal window alongside every GUI window a program opens, console
+// app or not — this is what actually suppresses it there. Gated to
+// release builds only (`cargo run`'s own debug builds keep the console,
+// so eprintln!/println! diagnostics — see e.g. the window-drag logging
+// in `Shell::window_event` — are still visible while developing).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
