@@ -522,6 +522,9 @@ pub struct App {
     /// or drag point into the editor's local coordinate space without
     /// recomputing the panel's layout themselves.
     pub preview_content_rect: Option<Rect>,
+    /// The sample-text picker card as last drawn (see
+    /// `ui::draw_sample_picker`), so a click outside it can close it.
+    pub sample_picker_rect: Rect,
     /// Set while dragging out a selection in the Preview tab — same
     /// pattern as `dragging_tile_size`.
     pub dragging_preview_selection: bool,
@@ -817,6 +820,7 @@ impl App {
                 editor
             },
             preview_content_rect: None,
+            sample_picker_rect: Rect::ZERO,
             dragging_preview_selection: false,
             pending_preview_preset: None,
             preview_align: TextAlign::Center,

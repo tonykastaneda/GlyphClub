@@ -190,11 +190,9 @@ pub fn draw_list(
     let visible = (viewport_h / row_h).ceil() as usize + 2;
     let end = (start + visible).min(total);
 
-    scene.push_clip_layer(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        &Rect::new(x0, rows_y0, x1, height),
-    );
+    let rows_area = Rect::new(x0, rows_y0, x1, height);
+    scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &rows_area);
+    let row_hits = app.hit_regions.len();
 
     for i in start..end {
         let row_y = rows_y0 + i as f64 * row_h - app.scroll_y;
@@ -207,6 +205,9 @@ pub fn draw_list(
     }
 
     scene.pop_layer();
+    // A row scrolled up under the column headers mustn't catch clicks meant
+    // for them (sorting, resizing, reordering).
+    crate::ui::clip_hit_regions_since(app, row_hits, rows_area);
     draw_scrollbar(app, scene, x1, rows_y0, height, total as f64 * row_h, viewport_h);
 
     app.list_groups_cache = Some((key, groups));

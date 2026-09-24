@@ -34,7 +34,12 @@ pub enum HitAction {
     StartDetailResize,
     ToggleSamplePicker,
     SetSampleText(String),
-    ClearSampleText,
+    /// The sample-text picker's × — closes the picker (the text stays).
+    CloseSamplePicker,
+    /// A panel's own blank area (a modal's card, the picker, …): absorbs
+    /// the click so it can't fall through to whatever is drawn underneath
+    /// — a font tile, or a modal's close-on-click backdrop.
+    Inert,
     /// The Preview tab's quick-preset dropdown (see `ui::detail`).
     TogglePreviewPresetDropdown,
     /// Records the chosen preset for `ui::detail::draw_preview_tab` to
@@ -435,6 +440,7 @@ pub fn draw(app: &mut App, text: &mut TextCx, width: f64, height: f64) -> Scene 
     draw_toolbar(app, text, &mut scene, content_x0, width);
 
     let content_y0 = theme::TOOLBAR_H;
+    let content_hits = app.hit_regions.len();
     match app.view_mode {
         ViewMode::Grid => grid::draw_grid(
             app, text, &mut scene, content_x0, content_x1, content_y0, height,
@@ -443,17 +449,19 @@ pub fn draw(app: &mut App, text: &mut TextCx, width: f64, height: f64) -> Scene 
             app, text, &mut scene, content_x0, content_x1, content_y0, height,
         ),
     }
+    // Tiles scrolled up under the toolbar are hidden there, but their hit
+    // regions weren't — and being pushed after the toolbar's, they won,
+    // swallowing toolbar clicks (including window-drag clicks on its empty
+    // space).
+    clip_hit_regions_since(app, content_hits, Rect::new(content_x0, content_y0, content_x1, height));
 
     if detail_open {
-        detail::draw(
-            app,
-            text,
-            &mut scene,
-            width - app.detail_w,
-            width,
-            content_y0,
-            height,
-        );
+        let detail_hits = app.hit_regions.len();
+        let detail_x0 = width - app.detail_w;
+        detail::draw(app, text, &mut scene, detail_x0, width, content_y0, height);
+        // 3px left of the panel keeps its edge's resize handle, which
+        // straddles the border.
+        clip_hit_regions_since(app, detail_hits, Rect::new(detail_x0 - 3.0, content_y0, width, height));
     }
 
     if app.sample_picker_open {
@@ -522,6 +530,11 @@ fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
 
     fill_rect(scene, card, theme::SIDEBAR_BG(), 18.0);
     stroke_rect(scene, card, theme::CONTROL_BORDER(), 18.0, 1.0);
+    app.sample_picker_rect = card;
+    app.hit_regions.push(HitRegion {
+        rect: card,
+        action: HitAction::Inert,
+    });
 
     // The sample text itself — an editable field, not just a display, so
     // typing here directly changes what every tile previews live.
@@ -556,10 +569,9 @@ fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
         action: HitAction::FocusField(Focus::SampleText),
     });
 
-    // This "×" clears the field back to the "Aa" fallback — it does not
-    // close the card. The only way to close it is the toolbar's preview
-    // button (the one that opened it), so an accidental click here can't
-    // lose the card entirely, just its current text.
+    // Closes the card; the typed text stays. (It used to clear the text
+    // instead, which left the toolbar button as the only way out — easy to
+    // get stuck in.) A click outside the card or Escape also closes it.
     let close_rect = Rect::new(card.x1 - 34.0, card.y0 + 10.0, card.x1 - 10.0, card.y0 + 34.0);
     let close_hovered = close_rect.contains(app.hover);
     scene.stroke(
@@ -584,7 +596,7 @@ fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
     );
     app.hit_regions.push(HitRegion {
         rect: close_rect,
-        action: HitAction::ClearSampleText,
+        action: HitAction::CloseSamplePicker,
     });
 
     // Quick-fill preset chips.
@@ -770,14 +782,21 @@ fn draw_drop_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: 
     let y0 = (height - card_h) / 2.0;
     let card = Rect::new(x0, y0, x0 + card_w, y0 + card_h);
 
-    fill_rect(
-        scene,
-        Rect::new(0.0, 0.0, width, height),
-        vello::peniko::Color::from_rgba8(0x00, 0x00, 0x00, 0x66),
-        0.0,
-    );
+    let backdrop = Rect::new(0.0, 0.0, width, height);
+    fill_rect(scene, backdrop, vello::peniko::Color::from_rgba8(0x00, 0x00, 0x00, 0x66), 0.0);
+    // A click outside the card cancels; the card itself absorbs clicks.
+    // Without these, anything but a button went straight through to the
+    // grid/toolbar behind the dimmed backdrop while the dialog stayed up.
+    app.hit_regions.push(HitRegion {
+        rect: backdrop,
+        action: HitAction::CancelDrop,
+    });
     fill_rect(scene, card, theme::SIDEBAR_BG(), 16.0);
     stroke_rect(scene, card, theme::CONTROL_BORDER(), 16.0, 1.0);
+    app.hit_regions.push(HitRegion {
+        rect: card,
+        action: HitAction::Inert,
+    });
 
     text.draw(scene, "Add to which library?", 15.0, None, theme::TEXT(), card.x0 + 20.0, card.y0 + 26.0);
     text.draw(scene, &file_name, 11.5, None, theme::TEXT_SECONDARY(), card.x0 + 20.0, card.y0 + 44.0);
@@ -853,14 +872,21 @@ fn draw_delete_confirm(app: &mut App, text: &mut TextCx, scene: &mut Scene, widt
     let y0 = (height - card_h) / 2.0;
     let card = Rect::new(x0, y0, x0 + card_w, y0 + card_h);
 
-    fill_rect(
-        scene,
-        Rect::new(0.0, 0.0, width, height),
-        vello::peniko::Color::from_rgba8(0x00, 0x00, 0x00, 0x66),
-        0.0,
-    );
+    let backdrop = Rect::new(0.0, 0.0, width, height);
+    fill_rect(scene, backdrop, vello::peniko::Color::from_rgba8(0x00, 0x00, 0x00, 0x66), 0.0);
+    // A click outside the card cancels; the card itself absorbs clicks.
+    // Without these, anything but a button went straight through to the
+    // grid/toolbar behind the dimmed backdrop while the dialog stayed up.
+    app.hit_regions.push(HitRegion {
+        rect: backdrop,
+        action: HitAction::CancelDelete,
+    });
     fill_rect(scene, card, theme::SIDEBAR_BG(), 16.0);
     stroke_rect(scene, card, theme::CONTROL_BORDER(), 16.0, 1.0);
+    app.hit_regions.push(HitRegion {
+        rect: card,
+        action: HitAction::Inert,
+    });
 
     text.draw(scene, "Delete from Library?", 15.0, None, theme::TEXT(), card.x0 + 20.0, card.y0 + 30.0);
     let body = format!(
@@ -1762,6 +1788,36 @@ pub fn handle_click(app: &mut App, point: Point) -> bool {
         .find(|r| r.rect.contains(point))
         .map(|r| &r.action);
 
+    // The sample-text picker is a dock you can keep typing in while you
+    // browse, so a click outside it closes it but still goes on to do
+    // whatever it was aimed at, rather than being swallowed like a menu's.
+    // The toolbar button that toggles it is left to toggle it itself.
+    if app.sample_picker_open
+        && !app.sample_picker_rect.contains(point)
+        && !matches!(hit, Some(HitAction::ToggleSamplePicker))
+    {
+        app.sample_picker_open = false;
+        if app.focus == Focus::SampleText {
+            app.focus = Focus::None;
+        }
+    }
+
+    // Any open dropdown closes on a click that isn't its own toggle or one
+    // of its items — they used to stay open until an item was picked.
+    let keeps = |owns: fn(&HitAction) -> bool| hit.is_some_and(owns);
+    if !keeps(|a| matches!(a, HitAction::TogglePreviewPresetDropdown | HitAction::SetPendingPreviewPreset(_))) {
+        app.preview_preset_open = false;
+    }
+    if !keeps(|a| matches!(a, HitAction::TogglePreviewSizeDropdown | HitAction::SetPreviewSize(_))) {
+        app.preview_size_dropdown_open = false;
+    }
+    if !keeps(|a| matches!(a, HitAction::ToggleGlyphBlockDropdown | HitAction::SetGlyphBlockFilter(_))) {
+        app.glyph_block_dropdown_open = false;
+    }
+    if !keeps(|a| matches!(a, HitAction::ToggleAppearanceDropdown | HitAction::SetAppearance(_))) {
+        app.appearance_dropdown_open = false;
+    }
+
     let Some(action) = hit else {
         app.focus = Focus::None;
         return false;
@@ -1844,10 +1900,10 @@ pub fn handle_click(app: &mut App, point: Point) -> bool {
             app.sample_text = text.clone();
             app.focus = Focus::SampleText;
         }
-        HitAction::ClearSampleText => {
-            app.sample_text.clear();
-            app.focus = Focus::SampleText;
+        HitAction::CloseSamplePicker => {
+            close_sample_picker(app);
         }
+        HitAction::Inert => {}
         HitAction::TogglePreviewPresetDropdown => {
             app.preview_preset_open = !app.preview_preset_open;
         }
@@ -2288,6 +2344,72 @@ pub fn confirm_new_tag(app: &mut App) {
     app.focus = Focus::None;
 }
 
+/// Trims every hit region pushed since `start` (an index into
+/// `app.hit_regions`) to `clip`, dropping any that end up entirely outside
+/// it. For scrolling content: its drawing is clipped to its viewport, and
+/// this makes its clickable areas match — otherwise a tile scrolled out of
+/// sight under a toolbar/header/tab bar keeps catching clicks meant for
+/// what's visibly on top there.
+pub(crate) fn clip_hit_regions_since(app: &mut App, start: usize, clip: Rect) {
+    clip_regions(&mut app.hit_regions, start, clip);
+}
+
+fn clip_regions(regions: &mut Vec<HitRegion>, start: usize, clip: Rect) {
+    let pushed = regions.split_off(start);
+    regions.extend(pushed.into_iter().filter_map(|mut region| {
+        let visible = region.rect.intersect(clip);
+        if visible.width() > 0.0 && visible.height() > 0.0 {
+            region.rect = visible;
+            Some(region)
+        } else {
+            None
+        }
+    }));
+}
+
+pub fn close_sample_picker(app: &mut App) {
+    app.sample_picker_open = false;
+    if app.focus == Focus::SampleText {
+        app.focus = Focus::None;
+    }
+}
+
+/// Escape: closes whichever one thing is on top — dialogs first, then
+/// menus, then dropdowns, then the sample-text picker — the same way a
+/// click outside each of them would. Returns whether anything closed.
+pub fn dismiss_topmost(app: &mut App) -> bool {
+    if app.confirm_delete.take().is_some() || app.pending_drop.take().is_some() {
+        return true;
+    }
+    // Settings' own dropdown before Settings itself.
+    if app.appearance_dropdown_open {
+        app.appearance_dropdown_open = false;
+        return true;
+    }
+    if app.about_open || app.settings_open {
+        app.about_open = false;
+        app.settings_open = false;
+        return true;
+    }
+    if app.font_context_menu.take().is_some()
+        || app.context_menu.take().is_some()
+        || app.open_win_menu.take().is_some()
+    {
+        return true;
+    }
+    if app.preview_preset_open || app.preview_size_dropdown_open || app.glyph_block_dropdown_open {
+        app.preview_preset_open = false;
+        app.preview_size_dropdown_open = false;
+        app.glyph_block_dropdown_open = false;
+        return true;
+    }
+    if app.sample_picker_open {
+        close_sample_picker(app);
+        return true;
+    }
+    false
+}
+
 /// The "Add Library" flow — a folder picker, then indexing whatever it
 /// finds. Shared by the toolbar button (`HitAction::AddFolder`) and the
 /// macOS menu bar's File ▸ Add Library\u{2026}.
@@ -2488,5 +2610,45 @@ fn open_url(url: &str) {
 pub fn cleanup_before_quit(app: &mut App) {
     for id in std::mem::take(&mut app.temp_active_ids) {
         let _ = app.catalog.force_deactivate(id);
+    }
+}
+
+#[cfg(test)]
+mod hit_region_tests {
+    use super::*;
+
+    fn region(rect: Rect, id: i64) -> HitRegion {
+        HitRegion { rect, action: HitAction::SelectFont(id) }
+    }
+
+    fn hit(regions: &[HitRegion], point: Point) -> Option<i64> {
+        match regions.iter().rev().find(|r| r.rect.contains(point)).map(|r| &r.action) {
+            Some(HitAction::SelectFont(id)) => Some(*id),
+            Some(_) => Some(-1),
+            None => None,
+        }
+    }
+
+    #[test]
+    fn scrolled_away_content_stops_catching_toolbar_clicks() {
+        let toolbar_button = HitRegion { rect: Rect::new(10.0, 10.0, 40.0, 40.0), action: HitAction::Rescan };
+        let mut regions = vec![toolbar_button];
+        let start = regions.len();
+        // A tile scrolled half under the 56px toolbar, one fully under it,
+        // and one fully visible.
+        regions.push(region(Rect::new(0.0, 20.0, 200.0, 120.0), 1));
+        regions.push(region(Rect::new(0.0, -80.0, 200.0, 20.0), 2));
+        regions.push(region(Rect::new(0.0, 130.0, 200.0, 230.0), 3));
+
+        // Before: the half-hidden tile swallows a click on the toolbar button.
+        assert_eq!(hit(&regions, Point::new(20.0, 25.0)), Some(1));
+
+        clip_regions(&mut regions, start, Rect::new(0.0, 56.0, 800.0, 600.0));
+
+        assert_eq!(hit(&regions, Point::new(20.0, 25.0)), Some(-1), "toolbar button wins");
+        assert_eq!(hit(&regions, Point::new(300.0, 30.0)), None, "empty toolbar space is empty");
+        assert_eq!(hit(&regions, Point::new(20.0, 80.0)), Some(1), "visible part still clickable");
+        assert_eq!(regions.len(), 3, "the fully hidden tile is dropped");
+        assert_eq!(hit(&regions, Point::new(20.0, 150.0)), Some(3));
     }
 }

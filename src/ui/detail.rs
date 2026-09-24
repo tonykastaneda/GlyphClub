@@ -531,6 +531,7 @@ fn draw_sizes_tab(app: &mut App, text: &mut TextCx, scene: &mut Scene, id: i64, 
     let family = app.preview_family(text, id);
 
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &area);
+    let tab_hits = app.hit_regions.len();
     let mut y = area.y0 - app.detail_tab_scroll_y;
     let mut total_h = 0.0;
     for &size in SIZES_LADDER {
@@ -559,6 +560,8 @@ fn draw_sizes_tab(app: &mut App, text: &mut TextCx, scene: &mut Scene, id: i64, 
         total_h += row_h;
     }
     scene.pop_layer();
+    // Rows scrolled up under the tab bar mustn't catch its clicks.
+    crate::ui::clip_hit_regions_since(app, tab_hits, area);
 
     app.detail_tab_scroll_max = (total_h - area.height()).max(0.0);
     app.detail_tab_scroll_y = app.detail_tab_scroll_y.clamp(0.0, app.detail_tab_scroll_max);
@@ -645,6 +648,7 @@ fn draw_glyphs_tab(app: &mut App, text: &mut TextCx, scene: &mut Scene, id: i64,
     let content_h = rows as f64 * (cell + gap);
 
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &grid_area);
+    let tab_hits = app.hit_regions.len();
     let start_row = (app.detail_tab_scroll_y / (cell + gap)).floor().max(0.0) as usize;
     let visible_rows = (grid_area.height() / (cell + gap)).ceil() as usize + 2;
     let end_row = (start_row + visible_rows).min(rows);
@@ -678,6 +682,8 @@ fn draw_glyphs_tab(app: &mut App, text: &mut TextCx, scene: &mut Scene, id: i64,
         }
     }
     scene.pop_layer();
+    // Rows scrolled up under the tab bar mustn't catch its clicks.
+    crate::ui::clip_hit_regions_since(app, tab_hits, grid_area);
 
     app.detail_tab_scroll_max = (content_h - grid_area.height()).max(0.0);
     app.detail_tab_scroll_y = app.detail_tab_scroll_y.clamp(0.0, app.detail_tab_scroll_max);
@@ -763,6 +769,7 @@ fn draw_info_tab(app: &mut App, text: &mut TextCx, scene: &mut Scene, id: i64, a
     ];
 
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &area);
+    let tab_hits = app.hit_regions.len();
     let mut y = area.y0 - app.detail_tab_scroll_y;
     let mut total_h = 0.0;
     for (label, value) in &rows {
@@ -786,6 +793,8 @@ fn draw_info_tab(app: &mut App, text: &mut TextCx, scene: &mut Scene, id: i64, a
         total_h += row_h;
     }
     scene.pop_layer();
+    // Rows scrolled up under the tab bar mustn't catch its clicks.
+    crate::ui::clip_hit_regions_since(app, tab_hits, area);
 
     app.detail_tab_scroll_max = (total_h - area.height()).max(0.0);
     app.detail_tab_scroll_y = app.detail_tab_scroll_y.clamp(0.0, app.detail_tab_scroll_max);

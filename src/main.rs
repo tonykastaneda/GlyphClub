@@ -216,6 +216,16 @@ fn handle_key(app: &mut App, text: &mut TextCx, event: winit::event::KeyEvent, m
             }
         }
     }
+    // Escape always works, focused field or not: it closes whatever is on
+    // top and drops focus. (It used to do nothing unless a text field had
+    // focus, so a dialog or the sample-text picker could only be closed by
+    // finding its button.) The New Tag field keeps its own Escape below,
+    // which cancels just the field and leaves its menu open.
+    if matches!(event.logical_key, Key::Named(NamedKey::Escape)) && app.focus != Focus::NewTag {
+        ui::dismiss_topmost(app);
+        app.focus = Focus::None;
+        return;
+    }
     if app.focus == Focus::None {
         return;
     }
@@ -556,16 +566,7 @@ impl ApplicationHandler<AppEvent> for Shell {
                     // window from empty background" by hand instead, the
                     // same way a native titlebar would.
                     if !ui::handle_click(&mut self.app, self.cursor) {
-                        let result = state.window.drag_window();
-                        eprintln!(
-                            "[drag] BACKGROUND click -> drag_window() cursor={:?} detail_open={} selected={:?} result={:?}",
-                            self.cursor, self.app.detail_open, self.app.selected, result
-                        );
-                    } else {
-                        eprintln!(
-                            "[drag] CONSUMED cursor={:?} detail_open={} focus={:?}",
-                            self.cursor, self.app.detail_open, self.app.focus
-                        );
+                        let _ = state.window.drag_window();
                     }
                 }
                 #[cfg(not(target_os = "macos"))]

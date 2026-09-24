@@ -37,6 +37,12 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: f64, hei
 
     fill_rect(scene, panel, theme::SIDEBAR_BG(), 16.0);
     stroke_rect(scene, panel, theme::CONTROL_BORDER(), 16.0, 1.0);
+    // The panel's own blank space absorbs clicks — otherwise they fell
+    // through to the backdrop and closed the panel.
+    app.hit_regions.push(HitRegion {
+        rect: panel,
+        action: HitAction::Inert,
+    });
 
     let title = "Settings";
     let tw = text.measure(title, 16.0, None);
