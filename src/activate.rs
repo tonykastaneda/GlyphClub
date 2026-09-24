@@ -20,9 +20,21 @@ pub fn uninstall(installed: &Path) -> Result<()> {
     platform::uninstall(installed)
 }
 
+/// The subfolder of the user font directory that `install` activates
+/// into — everything under it is GlyphClub's own, not a font the user
+/// installed themselves.
+pub const MANAGED_DIR_NAME: &str = "glyphclub";
+
+/// The per-user font folder the OS loads fonts from (`~/Library/Fonts` on
+/// macOS, `%LOCALAPPDATA%\Microsoft\Windows\Fonts` on Windows) — where
+/// Font Book / Windows' own "Install" puts a font by default.
+pub fn user_font_dir() -> Option<PathBuf> {
+    platform::user_font_dir()
+}
+
 fn managed_dir() -> Result<PathBuf> {
     let base = platform::user_font_dir().context("could not determine the user font directory")?;
-    let dir = base.join("glyphclub");
+    let dir = base.join(MANAGED_DIR_NAME);
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }

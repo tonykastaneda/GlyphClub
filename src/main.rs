@@ -24,6 +24,7 @@ mod app;
 mod branding;
 mod catalog;
 mod font;
+mod font_export;
 mod font_info;
 mod gpu;
 #[cfg(target_os = "macos")]
@@ -79,6 +80,9 @@ pub(crate) enum AppEvent {
     UpdateCheckUpToDate,
     /// A manual check's own network/parse request failed outright.
     UpdateCheckFailed,
+    /// File ▸ Export User Fonts…'s background copy finished (see
+    /// `ui::export_user_fonts`).
+    UserFontsExported(Result<font_export::ExportSummary, String>),
 }
 
 struct WindowState {
@@ -133,6 +137,7 @@ fn dispatch_menu_action(app: &mut App, action: native_menu::MenuAction) {
         MenuAction::CheckForUpdate => app::check_for_update(app.update_proxy.clone(), true),
         MenuAction::AddLibrary => ui::add_library(app),
         MenuAction::Sync => ui::sync_now(app),
+        MenuAction::ExportUserFonts => ui::export_user_fonts(app),
         MenuAction::FindFocus => app.focus = Focus::Search,
         MenuAction::SetView(mode) => {
             app.view_mode = mode;
@@ -746,6 +751,12 @@ impl ApplicationHandler<AppEvent> for Shell {
             }
             AppEvent::UpdateCheckFailed => {
                 self.app.status = "Couldn't check for updates".to_string();
+                if let Some(state) = &self.state {
+                    state.window.request_redraw();
+                }
+            }
+            AppEvent::UserFontsExported(result) => {
+                ui::finish_user_font_export(&mut self.app, result);
                 if let Some(state) = &self.state {
                     state.window.request_redraw();
                 }

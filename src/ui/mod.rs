@@ -112,6 +112,9 @@ pub enum HitAction {
     /// macOS gets the equivalent under its native app menu instead (see
     /// `native_menu::MenuAction::CheckForUpdate`).
     CheckForUpdate,
+    /// Windows' hand-rolled File menu's "Export User Fonts…" item — see
+    /// `export_user_fonts`.
+    ExportUserFonts,
 }
 
 pub struct HitRegion {
@@ -1596,6 +1599,8 @@ fn draw_windows_menu_dropdown(app: &mut App, text: &mut TextCx, scene: &mut Scen
             (Some("Add Library\u{2026}"), true, Some(HitAction::AddFolder)),
             (Some("Sync Now"), true, Some(HitAction::Rescan)),
             (None, true, None),
+            (Some("Export User Fonts\u{2026}"), true, Some(HitAction::ExportUserFonts)),
+            (None, true, None),
             (Some("Check for Updates\u{2026}"), true, Some(HitAction::CheckForUpdate)),
             (None, true, None),
             (Some("Settings\u{2026}"), true, Some(HitAction::OpenSettings)),
@@ -2050,6 +2055,10 @@ pub fn handle_click(app: &mut App, point: Point) -> bool {
             app.open_win_menu = None;
             crate::app::check_for_update(app.update_proxy.clone(), true);
         }
+        HitAction::ExportUserFonts => {
+            app.open_win_menu = None;
+            export_user_fonts(app);
+        }
     }
     true
 }
@@ -2300,6 +2309,47 @@ pub fn sync_now(app: &mut App) {
     match app.catalog.force_sync() {
         Ok(result) => app.reload_folders_and_fonts(result.status),
         Err(e) => app.status = e.to_string(),
+    }
+}
+
+/// File ▸ Export User Fonts… — picks a destination, then copies every
+/// user-installed font into a `User-FontExport` folder there (see
+/// `crate::font_export`). The copy runs on a background thread, since a
+/// big font folder can take a while, and reports back through
+/// `AppEvent::UserFontsExported` → `finish_user_font_export`.
+pub fn export_user_fonts(app: &mut App) {
+    let Some(chosen) = rfd::FileDialog::new()
+        .set_title("Choose where to save the User-FontExport folder")
+        .pick_folder()
+    else {
+        return;
+    };
+    app.status = "Exporting user fonts\u{2026}".to_string();
+    let proxy = app.update_proxy.clone();
+    std::thread::spawn(move || {
+        let result = crate::font_export::export_user_fonts(&chosen).map_err(|e| e.to_string());
+        let _ = proxy.send_event(crate::AppEvent::UserFontsExported(result));
+    });
+}
+
+pub fn finish_user_font_export(
+    app: &mut App,
+    result: Result<crate::font_export::ExportSummary, String>,
+) {
+    match result {
+        Ok(summary) => {
+            let plural = if summary.copied == 1 { "" } else { "s" };
+            let mut status = format!("Exported {} font{plural} to {}", summary.copied, summary.dest.display());
+            if summary.skipped > 0 {
+                status.push_str(&format!(", {} already there", summary.skipped));
+            }
+            if summary.failed > 0 {
+                status.push_str(&format!(", {} couldn't be copied", summary.failed));
+            }
+            app.status = status;
+            let _ = crate::reveal::reveal(&summary.dest);
+        }
+        Err(e) => app.status = format!("Couldn't export user fonts: {e}"),
     }
 }
 

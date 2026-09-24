@@ -39,6 +39,7 @@ pub enum MenuAction {
     CheckForUpdate,
     AddLibrary,
     Sync,
+    ExportUserFonts,
     FindFocus,
     SetView(ViewMode),
     ToggleInfo,
@@ -126,9 +127,26 @@ impl NativeMenu {
         // comment), which made no sense for an app with no other Edit
         // menu content and no real `NSTextView` for any of them to act on.
         let find_i = reg(&mut items, mk("Find", sup, Code::KeyF), MenuAction::FindFocus);
-        let file_menu =
-            Submenu::with_items("File", true, &[&add_library_i, &sync_i, &PredefinedMenuItem::separator(), &find_i])
-                .expect("file menu");
+        // No accelerator: a one-time migration step, not something worth
+        // a shortcut anyone could hit by accident.
+        let export_user_fonts_i = reg(
+            &mut items,
+            MenuItem::new("Export User Fonts\u{2026}", true, None),
+            MenuAction::ExportUserFonts,
+        );
+        let file_menu = Submenu::with_items(
+            "File",
+            true,
+            &[
+                &add_library_i,
+                &sync_i,
+                &PredefinedMenuItem::separator(),
+                &export_user_fonts_i,
+                &PredefinedMenuItem::separator(),
+                &find_i,
+            ],
+        )
+        .expect("file menu");
 
         let grid_i = reg(
             &mut items,
