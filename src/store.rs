@@ -119,6 +119,15 @@ impl Store {
         if !has_coverage_column {
             conn.execute_batch("ALTER TABLE fonts ADD COLUMN coverage BLOB;")?;
         }
+        // Added for "Date Added" sorting: when the file arrived in its
+        // folder (`added::added_time`). NULL until filled — by the next scan
+        // of a changed file, or `Catalog::open`'s one-time backfill.
+        let has_added_column = conn
+            .prepare("SELECT 1 FROM pragma_table_info('fonts') WHERE name = 'added'")?
+            .exists([])?;
+        if !has_added_column {
+            conn.execute_batch("ALTER TABLE fonts ADD COLUMN added INTEGER;")?;
+        }
         Ok(Self { conn })
     }
 
@@ -193,8 +202,8 @@ impl Store {
         {
             let mut upsert = tx.prepare(
                 "INSERT INTO fonts
-                    (folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size, postscript_name, coverage)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                    (folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size, postscript_name, coverage, added)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT(path, face_index) DO UPDATE SET
                     folder_id = excluded.folder_id,
                     family = excluded.family,
@@ -205,7 +214,8 @@ impl Store {
                     mtime = excluded.mtime,
                     size = excluded.size,
                     postscript_name = excluded.postscript_name,
-                    coverage = excluded.coverage",
+                    coverage = excluded.coverage,
+                    added = excluded.added",
             )?;
             for r in records {
                 upsert.execute(rusqlite::params![
@@ -221,6 +231,7 @@ impl Store {
                     r.size,
                     r.postscript_name,
                     crate::coverage::encode(r.coverage.as_deref().unwrap_or(&[])),
+                    r.added,
                 ])?;
             }
         }
@@ -236,6 +247,27 @@ impl Store {
         for (id, face_index) in stored {
             if !kept.contains(&face_index) {
                 tx.execute("DELETE FROM fonts WHERE id = ?1", [id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Font files whose added date hasn't been read yet (catalogued before
+    /// the column existed).
+    pub fn paths_missing_added(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT path FROM fonts WHERE added IS NULL")?;
+        let rows = stmt.query_map([], |row| row.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Records added dates, in one transaction.
+    pub fn set_added(&mut self, dates: &[(String, i64)]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare("UPDATE fonts SET added = ?2 WHERE path = ?1")?;
+            for (path, added) in dates {
+                stmt.execute(rusqlite::params![path, added])?;
             }
         }
         tx.commit()?;
@@ -275,7 +307,7 @@ impl Store {
     /// rows, via `ON DELETE CASCADE`) is removed.
     pub fn fonts_in_folder(&self, folder_id: i64) -> Result<Vec<FontRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size, COALESCE(postscript_name, '')
+            "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size, COALESCE(postscript_name, ''), COALESCE(added, mtime)
              FROM fonts
              WHERE folder_id = ?1",
         )?;
@@ -287,7 +319,7 @@ impl Store {
 
     pub fn all_fonts(&self) -> Result<Vec<FontRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size, COALESCE(postscript_name, '')
+            "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size, COALESCE(postscript_name, ''), COALESCE(added, mtime)
              FROM fonts
              ORDER BY family COLLATE NOCASE, weight, italic",
         )?;
@@ -300,7 +332,7 @@ impl Store {
     pub fn search_fonts(&self, query: &str) -> Result<Vec<FontRow>> {
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
         let mut stmt = self.conn.prepare(
-            "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size, COALESCE(postscript_name, '')
+            "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size, COALESCE(postscript_name, ''), COALESCE(added, mtime)
              FROM fonts
              WHERE family LIKE ?1 ESCAPE '\\'
              ORDER BY family COLLATE NOCASE, weight, italic",
@@ -501,6 +533,7 @@ fn row_to_font(row: &rusqlite::Row) -> rusqlite::Result<FontRow> {
             size: row.get(10)?,
             postscript_name: row.get(11)?,
             coverage: None,
+            added: row.get(12)?,
         },
     })
 }

@@ -66,7 +66,11 @@ pub fn scan_folder(store: &mut Store, folder: &Folder, ignored: &HashSet<String>
         .filter_map(|(path_str, mtime, size)| {
             let path = Path::new(path_str);
             let data = std::fs::read(path).ok()?;
-            let records = parse_faces(&data, path, *mtime, *size);
+            let mut records = parse_faces(&data, path, *mtime, *size);
+            let added = crate::added::added_time(path).unwrap_or(*mtime);
+            for r in &mut records {
+                r.added = added;
+            }
             if records.is_empty() {
                 None
             } else {

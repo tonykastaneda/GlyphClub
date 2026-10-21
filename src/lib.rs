@@ -4,6 +4,7 @@
 //! declares these modules itself until it's retired.
 
 pub mod activate;
+pub mod added;
 pub mod activation_memory;
 pub mod catalog;
 pub mod coverage;

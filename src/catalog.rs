@@ -108,6 +108,25 @@ impl Catalog {
             }
         }
 
+        // One-time upgrade: read the added date of fonts catalogued before
+        // it was stored. Cheap: one metadata call per file, no parsing.
+        if let Ok(paths) = store.paths_missing_added() {
+            if !paths.is_empty() {
+                let dates: Vec<(String, i64)> = paths
+                    .into_iter()
+                    .filter_map(|p| {
+                        let path = Path::new(&p);
+                        let added = crate::added::added_time(path).or_else(|| {
+                            let m = std::fs::metadata(path).ok()?.modified().ok()?;
+                            Some(m.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64)
+                        })?;
+                        Some((p, added))
+                    })
+                    .collect();
+                let _ = store.set_added(&dates);
+            }
+        }
+
         let mut watcher = new_debouncer(
             Duration::from_millis(800),
             move |res: notify_debouncer_mini::DebounceEventResult| {

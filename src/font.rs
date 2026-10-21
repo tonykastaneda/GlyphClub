@@ -20,6 +20,9 @@ pub struct FontRecord {
     pub monospace: bool,
     pub mtime: i64,
     pub size: i64,
+    /// When the file arrived in its folder (see `added`); what "Date
+    /// Added" sorts by. Starts as `mtime` until a scan reads the real date.
+    pub added: i64,
 }
 
 /// Extracts one [`FontRecord`] per face found in `data` (a file may be a single
@@ -51,6 +54,7 @@ pub fn parse_faces(data: &[u8], path: &Path, mtime: i64, size: i64) -> Vec<FontR
                 monospace: face.is_monospaced(),
                 mtime,
                 size,
+                added: mtime,
             })
         })
         .collect()

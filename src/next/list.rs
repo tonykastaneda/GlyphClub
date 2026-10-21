@@ -241,7 +241,7 @@ impl GlyphClub {
         let expandable = f.faces.len() > 1 && face_k.is_none();
         let expanded = self.expand_all || self.expanded.contains(&key);
         let group: SharedString = format!("row-{r}").into();
-        let when = if face_k.is_some() { face.mtime } else { f.newest_mtime };
+        let when = if face_k.is_some() { face.added } else { f.newest_added };
         let added = chrono::DateTime::from_timestamp(when, 0)
             .map(|d| d.with_timezone(&chrono::Local).format("%b %-d, %Y at %-I:%M %p").to_string())
             .unwrap_or_default();

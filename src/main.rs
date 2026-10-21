@@ -19,6 +19,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
 mod activate;
+mod added;
 mod activation_memory;
 mod app;
 mod branding;

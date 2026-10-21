@@ -11,8 +11,7 @@ use gpui_kit::SharedString;
 
 use crate::settings::SortField;
 
-/// How far back Recents reaches, by file modification time (same as the
-/// old front end).
+/// How far back Recents reaches, by when a font arrived in its library.
 const RECENT_WINDOW_SECS: i64 = 14 * 24 * 60 * 60;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -33,7 +32,8 @@ pub struct Face {
     pub postscript_name: String,
     pub weight: u16,
     pub italic: bool,
-    pub mtime: i64,
+    /// When the file arrived in its library folder.
+    pub added: i64,
 }
 
 /// One family within one library folder. The same family in two folders is
@@ -46,7 +46,7 @@ pub struct Family {
     /// Every face in the family, Regular-closest first.
     pub faces: Vec<Face>,
     pub is_system: bool,
-    pub newest_mtime: i64,
+    pub newest_added: i64,
     pub format: &'static str,
 }
 
@@ -120,10 +120,10 @@ impl Library {
                 folder_id: row.folder_id,
                 faces: Vec::new(),
                 is_system,
-                newest_mtime: rec.mtime,
+                newest_added: rec.added,
                 format: format_label(&rec.path),
             });
-            fam.newest_mtime = fam.newest_mtime.max(rec.mtime);
+            fam.newest_added = fam.newest_added.max(rec.added);
             fam.faces.push(Face {
                 id: row.id,
                 path: rec.path,
@@ -131,7 +131,7 @@ impl Library {
                 postscript_name: rec.postscript_name,
                 weight: rec.weight,
                 italic: rec.italic,
-                mtime: rec.mtime,
+                added: rec.added,
             });
         }
 
@@ -225,7 +225,7 @@ impl Library {
                 Nav::All => true,
                 Nav::System => f.is_system,
                 Nav::Starred => self.family_starred(f),
-                Nav::Recents => !f.is_system && f.newest_mtime >= recent_cutoff,
+                Nav::Recents => !f.is_system && f.newest_added >= recent_cutoff,
                 Nav::Folder(id) => f.folder_id == id,
                 Nav::Tag(tag) => f
                     .ids()
@@ -251,7 +251,7 @@ impl Library {
                     .is_system
                     .cmp(&fb.is_system)
                     .reverse()
-                    .then(fa.newest_mtime.cmp(&fb.newest_mtime)),
+                    .then(fa.newest_added.cmp(&fb.newest_added)),
                 SortField::Enabled => self.family_active(fa).cmp(&self.family_active(fb)),
                 SortField::Starred => self.family_starred(fa).cmp(&self.family_starred(fb)),
                 SortField::Styles => fa.faces.len().cmp(&fb.faces.len()),

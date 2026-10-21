@@ -82,7 +82,7 @@ tray-icon = { version = "0.24", default-features = false }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSButton", "NSView", "NSApplication", "NSImage", "NSRunningApplication", "NSResponder"] }
-objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSData", "NSUserDefaults", "NSString"] }
+objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSData", "NSUserDefaults", "NSString", "NSURL", "NSDate", "NSError"] }
 # The menu bar icon (see `tray.rs`) — same crate as Windows' system tray.
 tray-icon = { version = "0.24", default-features = false }
 # The native macOS menu bar (see `native_menu.rs`) — same crate/version
