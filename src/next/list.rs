@@ -25,7 +25,40 @@ const W_STAR: f32 = 40.;
 const W_FORMAT: f32 = 160.;
 const W_CATEGORY: f32 = 110.;
 const W_ADDED: f32 = 190.;
-const FIXED_W: f32 = W_DOT + W_NAME + W_STYLES + W_STAR + W_FORMAT + W_CATEGORY + W_ADDED;
+const MIN_PREVIEW_W: f32 = 140.;
+
+/// Which optional columns fit. When space runs short they go in this order:
+/// Category, Date Added, Format, Styles, so Preview keeps a usable width.
+#[derive(Clone, Copy)]
+struct Columns {
+    styles: bool,
+    format: bool,
+    category: bool,
+    added: bool,
+}
+
+impl Columns {
+    fn fit(avail: f32) -> (Self, f32) {
+        let mut c = Columns { styles: true, format: true, category: true, added: true };
+        let fixed = |c: &Columns| {
+            W_DOT
+                + W_NAME
+                + W_STAR
+                + if c.styles { W_STYLES } else { 0. }
+                + if c.format { W_FORMAT } else { 0. }
+                + if c.category { W_CATEGORY } else { 0. }
+                + if c.added { W_ADDED } else { 0. }
+        };
+        for drop in [|c: &mut Columns| c.category = false, |c: &mut Columns| c.added = false, |c: &mut Columns| c.format = false, |c: &mut Columns| c.styles = false] {
+            if avail - fixed(&c) >= MIN_PREVIEW_W {
+                break;
+            }
+            drop(&mut c);
+        }
+        let preview = (avail - fixed(&c)).max(30.);
+        (c, preview)
+    }
+}
 
 #[derive(Clone, Copy)]
 enum Row {
@@ -67,6 +100,8 @@ impl GlyphClub {
             .gap(px(4.))
             .border_l_1()
             .border_color(pal.border)
+            .overflow_hidden()
+            .whitespace_nowrap()
             .map(|d| match width {
                 Some(w) => d.w(px(w)).flex_shrink_0(),
                 None => d.flex_1().min_w_0(),
@@ -98,7 +133,7 @@ impl GlyphClub {
         if self.info_open {
             avail -= crate::detail::detail_width(cx);
         }
-        let preview_w = (avail - FIXED_W - 16.).max(30.);
+        let (cols, preview_w) = Columns::fit(avail - 16.);
 
         let rows = self.list_rows();
         let count = rows.len();
@@ -119,7 +154,7 @@ impl GlyphClub {
             .child(self.header_cell("h-dot", div(), Some(SortField::Enabled), Some(W_DOT), &pal, cx).border_l_0())
             .child(self.header_cell("h-name", "Name", Some(SortField::Name), Some(W_NAME), &pal, cx))
             .child(self.header_cell("h-preview", "Preview", None, None, &pal, cx))
-            .child(self.header_cell("h-styles", "Styles", Some(SortField::Styles), Some(W_STYLES), &pal, cx))
+            .when(cols.styles, |d| d.child(self.header_cell("h-styles", "Styles", Some(SortField::Styles), Some(W_STYLES), &pal, cx)))
             .child(self.header_cell(
                 "h-star",
                 Icon::new(IconName::Star).size(px(12.)),
@@ -128,9 +163,9 @@ impl GlyphClub {
                 &pal,
                 cx,
             ))
-            .child(self.header_cell("h-format", "Format", Some(SortField::Format), Some(W_FORMAT), &pal, cx))
-            .child(self.header_cell("h-category", "Category", Some(SortField::Category), Some(W_CATEGORY), &pal, cx))
-            .child(self.header_cell("h-added", "Date Added", Some(SortField::DateAdded), Some(W_ADDED), &pal, cx));
+            .when(cols.format, |d| d.child(self.header_cell("h-format", "Format", Some(SortField::Format), Some(W_FORMAT), &pal, cx)))
+            .when(cols.category, |d| d.child(self.header_cell("h-category", "Category", Some(SortField::Category), Some(W_CATEGORY), &pal, cx)))
+            .when(cols.added, |d| d.child(self.header_cell("h-added", "Date Added", Some(SortField::DateAdded), Some(W_ADDED), &pal, cx)));
 
         let list = uniform_list(
             "list",
@@ -149,7 +184,7 @@ impl GlyphClub {
                 this.request_fonts(wanted, cx);
                 range
                     .filter_map(|r| rows.get(r).copied().map(|row| (r, row)))
-                    .map(|(r, row)| this.list_row(r, row, sample.clone(), &chars, preview_w, &pal, window, cx))
+                    .map(|(r, row)| this.list_row(r, row, sample.clone(), &chars, preview_w, cols, &pal, window, cx))
                     .collect()
             }),
         )
@@ -182,6 +217,7 @@ impl GlyphClub {
         sample: SharedString,
         chars: &[u32],
         preview_w: f32,
+        cols: Columns,
         pal: &Palette,
         window: &Window,
         cx: &mut Context<Self>,
@@ -347,18 +383,18 @@ impl GlyphClub {
             .child(div().w(px(W_DOT)).flex_shrink_0().flex().justify_center().child(dot))
             .child(name_cell)
             .child(preview)
-            .child(
+            .when(cols.styles, |d| d.child(
                 cell(W_STYLES).text_color(fg_dim).child(if face_k.is_none() {
                     let n = f.faces.len();
                     format!("{n} style{}", if n == 1 { "" } else { "s" })
                 } else {
                     String::new()
                 }),
-            )
+            ))
             .child(cell(W_STAR).flex().justify_center().child(star))
-            .child(cell(W_FORMAT).text_color(fg_dim).child(f.format))
-            .child(cell(W_CATEGORY).text_color(fg_dim).child(category))
-            .child(cell(W_ADDED).text_color(fg_dim).child(added))
+            .when(cols.format, |d| d.child(cell(W_FORMAT).text_color(fg_dim).child(f.format)))
+            .when(cols.category, |d| d.child(cell(W_CATEGORY).text_color(fg_dim).child(category)))
+            .when(cols.added, |d| d.child(cell(W_ADDED).text_color(fg_dim).child(added)))
             .on_click(cx.listener({
                 let key = key.clone();
                 move |this, ev: &ClickEvent, window, cx| {
