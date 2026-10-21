@@ -11,6 +11,7 @@ pub mod coverage;
 pub mod font;
 pub mod font_export;
 pub mod font_info;
+pub mod icons;
 pub mod integrations;
 pub mod login_item;
 pub mod reveal;

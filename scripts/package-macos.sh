@@ -38,6 +38,9 @@ rm -rf "$STAGE_DIR"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$BUILD_DIR/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 cp branding/macos/GlyphClub.icns "$APP_BUNDLE/Contents/Resources/GlyphClub.icns"
+# The bundled free icon font sets (sidebar > Icon Fonts), with their
+# licenses; see scripts/fetch-icon-fonts.py and src/icons.rs.
+ditto assets/icon-fonts "$APP_BUNDLE/Contents/Resources/icon-fonts"
 sed "s/__VERSION__/$VERSION/g" packaging/macos/Info.plist > "$APP_BUNDLE/Contents/Info.plist"
 
 # The Illustrator plug-in (plugin/, installed from Settings > Integrations)

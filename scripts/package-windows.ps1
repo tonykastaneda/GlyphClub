@@ -32,6 +32,8 @@ $ZipName = "GlyphClub-Windows.zip"
 Remove-Item -Recurse -Force $StageDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
 Copy-Item "target/release/GlyphClub.exe" "$StageDir/GlyphClub.exe"
+# The bundled free icon font sets, with their licenses (see src/icons.rs).
+Copy-Item -Recurse "assets/icon-fonts" "$StageDir/icon-fonts"
 
 Write-Host "==> Zipping"
 $ZipPath = "target/package/$ZipName"
