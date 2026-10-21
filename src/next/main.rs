@@ -9,6 +9,7 @@ mod chrome;
 mod detail;
 mod fit;
 mod grid;
+mod icon_view;
 mod illustrator;
 mod library;
 mod list;
@@ -33,7 +34,7 @@ use crate::settings::{AppSettings, Settings};
 
 gpui_kit::assets::icon_assets!(
     ExtraIcons,
-    [Clock, Library, Monitor, Tag, LayoutGrid, List, TextCursorInput, TextAlignStart, TextAlignCenter, TextAlignEnd, Download, ChevronsRight]
+    [Clock, Library, Monitor, Tag, Shapes, LayoutGrid, List, TextCursorInput, TextAlignStart, TextAlignCenter, TextAlignEnd, Download, ChevronsRight]
 );
 
 struct AppAssets;

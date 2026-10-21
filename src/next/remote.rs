@@ -9,7 +9,7 @@ use crate::app::{DetailTab, GlyphClub};
 use crate::library::Nav;
 use crate::settings::{AppSettings, Appearance, SortField, ViewMode};
 
-pub const HELP: &str = "state | view grid|list | nav all|system|starred|recents|library <name>|tag <name> | \
+pub const HELP: &str = "state | view grid|list | nav all|system|starred|recents|library <name>|tag <name>|icons <set> | \
 select <family>… | deselect | info open|close | tab preview|sizes|glyphs|features|info | face <style> | \
 sample <text> | size <n> | search <text> | sort <field> [asc|desc] | expand on|off | sidebar show|hide | \
 theme light|dark|system | window <w> <h> | settings general|sidebar|import|auto | action <name> | scroll top|<row>";
@@ -49,6 +49,16 @@ impl GlyphClub {
                             .find(|f| f.name.to_lowercase() == name || f.id.to_string() == name)
                             .ok_or_else(|| format!("no library “{name}”"))?;
                         Nav::Folder(f.id)
+                    }
+                    "icons" => {
+                        let name = args[1..].join(" ").to_lowercase();
+                        let i = self
+                            .icon_sets
+                            .iter()
+                            .position(|s| s.name.to_lowercase() == name || s.slug == name)
+                            .ok_or_else(|| format!("no icon set “{name}”"))?;
+                        self.icons_open = true;
+                        Nav::Icons(i)
                     }
                     "tag" => {
                         let name = args[1..].join(" ").to_lowercase();
@@ -254,6 +264,7 @@ impl GlyphClub {
             Nav::Recents => json!("recents"),
             Nav::Folder(id) => json!({ "library": self.lib.folders.iter().find(|f| f.id == id).map(|f| f.name.to_string()) }),
             Nav::Tag(id) => json!({ "tag": self.lib.tag_name(id) }),
+            Nav::Icons(i) => json!({ "icons": self.icon_sets.get(i).map(|s| s.name.clone()) }),
         };
         let selected: Vec<String> = self.selection().iter().map(|&i| self.lib.families[i].name.to_string()).collect();
         let visible: Vec<Value> = self

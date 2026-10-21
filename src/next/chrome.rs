@@ -200,6 +200,7 @@ impl GlyphClub {
                     .when(s.sidebar_show_recent, |d| {
                         d.child(self.nav_row("recents", Nav::Recents, IconName::Clock, "Recents".into(), None, pal, cx))
                     })
+                    .child(self.icon_fonts_group(pal, cx))
                     .child(Self::section_header("Libraries", pal))
                     .child(libraries)
                     .child(Self::section_header("Tags", pal))
@@ -236,6 +237,46 @@ impl GlyphClub {
                         d.child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(pal.text_dim).child(label))
                     }),
             )
+    }
+
+    /// Sidebar ▸ Icon Fonts: a collapsible group of every icon set.
+    fn icon_fonts_group(&self, pal: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let total: usize = self.icon_sets.iter().map(|s| s.icons.len()).sum();
+        let open = self.icons_open;
+        let mut group = div().flex().flex_col().gap(px(1.)).child(
+            div()
+                .id("icon-fonts")
+                .h(px(30.))
+                .mx(px(10.))
+                .pl(px(2.))
+                .pr(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .rounded(px(6.))
+                .hover(|s| s.bg(pal.hover))
+                .child(
+                    Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight })
+                        .size(px(12.))
+                        .text_color(pal.text_dim),
+                )
+                .child(Icon::new(IconName::Shapes).size(px(16.)).text_color(pal.text))
+                .child(div().flex_1().pl(px(4.)).text_size(px(13.)).text_color(pal.text).child("Icon Fonts"))
+                .when(total > 0, |d| d.child(div().text_size(px(11.)).text_color(pal.text_dim).child(total.to_string())))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.icons_open = !this.icons_open;
+                    cx.notify();
+                })),
+        );
+        if open {
+            for (i, set) in self.icon_sets.iter().enumerate() {
+                group = group.child(
+                    self.nav_row(("iconset", i as u64), Nav::Icons(i), IconName::Copy, set.name.clone().into(), None, pal, cx)
+                        .pl(px(30.)),
+                );
+            }
+        }
+        group
     }
 
     pub fn toolbar(&self, pal: &Palette, cx: &mut Context<Self>) -> impl IntoElement {

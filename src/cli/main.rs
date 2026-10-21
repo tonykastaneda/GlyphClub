@@ -79,6 +79,17 @@ enum Command {
     },
     /// Copy every user-installed font into <folder>/User-FontExport.
     ExportUserFonts { folder: PathBuf },
+    /// List the bundled icon sets, or the icons in one.
+    Icons { set: Option<String> },
+    /// Save one icon as an SVG of vector paths (what dragging it out does).
+    IconSvg {
+        set: String,
+        icon: String,
+        out: PathBuf,
+        /// Height in pixels.
+        #[arg(long, default_value_t = 64.0)]
+        size: f32,
+    },
     /// Drive the running app's UI, e.g. `app view list`, `app select Optima`,
     /// `app tab glyphs`, `app action ToggleDarkMode`, `app state`,
     /// `app screenshot shot.png`. `app help` lists every command.
@@ -301,6 +312,50 @@ fn run(cli: &Cli) -> Result<()> {
         }
         Command::Activate { fonts, temp } => set_active(fonts, true, *temp, json_out)?,
         Command::Deactivate { fonts } => set_active(fonts, false, false, json_out)?,
+        Command::Icons { set } => {
+            let sets = glyphclub::icons::load_sets();
+            match set {
+                None => {
+                    if json_out {
+                        let list: Vec<Value> = sets
+                            .iter()
+                            .map(|s| json!({ "slug": s.slug, "name": s.name, "icons": s.icons.len(), "license": s.license, "version": s.version }))
+                            .collect();
+                        println!("{}", json!({ "ok": true, "sets": list }));
+                    } else {
+                        for s in &sets {
+                            println!("{:<26} {:>6} icons  {}", s.slug, s.icons.len(), s.license);
+                        }
+                    }
+                }
+                Some(which) => {
+                    let s = find_set(&sets, which)?;
+                    if json_out {
+                        let list: Vec<Value> = s.icons.iter().map(|i| json!({ "name": i.name, "codepoint": i.codepoint })).collect();
+                        println!("{}", json!({ "ok": true, "set": s.name, "icons": list }));
+                    } else {
+                        for i in &s.icons {
+                            println!("U+{:04X}  {}", i.codepoint, i.name);
+                        }
+                    }
+                }
+            }
+        }
+        Command::IconSvg { set, icon, out, size } => {
+            let sets = glyphclub::icons::load_sets();
+            let s = find_set(&sets, set)?;
+            let wanted = icon.to_lowercase().replace(['-', '_'], " ");
+            let found = s
+                .icons
+                .iter()
+                .find(|i| i.name.to_lowercase() == wanted)
+                .ok_or_else(|| anyhow!("no icon “{icon}” in {} (see `glyphclub-cli icons {}`)", s.name, s.slug))?;
+            let data = std::fs::read(&s.font_path)?;
+            let svg = glyphclub::icons::icon_svg(&data, found.codepoint, *size)
+                .ok_or_else(|| anyhow!("“{icon}” has no outline"))?;
+            std::fs::write(out, svg)?;
+            done(json_out, &format!("Saved {} from {} to {}", found.name, s.name, out.display()));
+        }
         Command::App { command, args } => {
             if command == "screenshot" {
                 let path = args.first().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("glyphclub.png"));
@@ -425,6 +480,13 @@ fn print_families(fams: &[Family], active: &HashSet<i64>, starred: &HashSet<i64>
         );
     }
     eprintln!("{} famil{}", fams.len(), if fams.len() == 1 { "y" } else { "ies" });
+}
+
+fn find_set<'a>(sets: &'a [glyphclub::icons::IconSet], which: &str) -> Result<&'a glyphclub::icons::IconSet> {
+    let w = which.to_lowercase();
+    sets.iter()
+        .find(|s| s.slug == w || s.name.to_lowercase() == w)
+        .ok_or_else(|| anyhow!("no icon set “{which}” (see `glyphclub-cli icons`)"))
 }
 
 fn done(json_out: bool, message: &str) {

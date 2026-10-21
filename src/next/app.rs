@@ -103,6 +103,12 @@ pub struct GlyphClub {
     pub expand_all: bool,
     /// The grid's tiles: (family, style when families are expanded).
     pub grid_items: Vec<(usize, Option<usize>)>,
+    /// The bundled and user icon sets (sidebar ▸ Icon Fonts).
+    pub icon_sets: Vec<Arc<glyphclub::icons::IconSet>>,
+    pub icon_font_data: HashMap<usize, Arc<Vec<u8>>>,
+    pub selected_icon: Option<(usize, usize)>,
+    pub icon_scroll: UniformListScrollHandle,
+    pub icons_open: bool,
     /// Columns in the grid's last layout (for scrolling to a tile).
     pub last_cols: usize,
     pub plugin_update_noted: Option<String>,
@@ -178,6 +184,16 @@ impl GlyphClub {
         })
         .detach();
 
+        // Icon sets, read off the main thread.
+        cx.spawn(async move |this, cx| {
+            let sets = cx.background_executor().spawn(async { glyphclub::icons::load_sets() }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.icon_sets = sets.into_iter().map(Arc::new).collect();
+                cx.notify();
+            });
+        })
+        .detach();
+
         // A quiet update check on launch.
         cx.spawn(async move |this, cx| {
             let result = cx.background_executor().spawn(async { update::check() }).await;
@@ -234,6 +250,11 @@ impl GlyphClub {
             categories: HashMap::new(),
             expand_all: false,
             grid_items: Vec::new(),
+            icon_sets: Vec::new(),
+            icon_font_data: HashMap::new(),
+            selected_icon: None,
+            icon_scroll: UniformListScrollHandle::new(),
+            icons_open: false,
             last_cols: 1,
             plugin_update_noted: None,
             app_menu_bar: (!cfg!(target_os = "macos")).then(|| gpui_kit::component::menu::AppMenuBar::new(cx)),
@@ -1289,7 +1310,9 @@ impl Render for GlyphClub {
         }
         self.sidebar_shown = self.sidebar_open && (!self.compact || self.sidebar_forced);
 
-        let content = if self.visible.is_empty() {
+        let content = if let Nav::Icons(set) = self.nav {
+            self.render_icons(set, &pal, window, cx)
+        } else if self.visible.is_empty() {
             self.empty_state(&pal, cx).into_any_element()
         } else if settings.view_mode == ViewMode::List {
             self.render_list(&pal, window, cx).into_any_element()
@@ -1363,7 +1386,7 @@ impl Render for GlyphClub {
                     .child(self.toolbar(&pal, cx))
                     .when_some(self.update_banner(&pal, cx), |d, b| d.child(b))
                     .child(div().flex_1().min_h_0().child(content))
-                    .when(settings.show_sample_bar, |d| d.child(self.sample_bar(&pal, cx))),
+                    .when(settings.show_sample_bar && !matches!(self.nav, Nav::Icons(_)), |d| d.child(self.sample_bar(&pal, cx))),
             )
             .when(self.info_open, |d| d.child(self.render_detail(&pal, window, cx)));
 
