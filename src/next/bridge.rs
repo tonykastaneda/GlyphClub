@@ -12,6 +12,9 @@
 //!   -> {"ok":true,"activated":[…],"alreadyActive":[…],"notFound":[…],"failed":[…]}
 //! {"token":"…","method":"openIntegrations"}   (shows Settings ▸ Integrations)
 //! {"token":"…","method":"show"}               (a second GlyphClub launch)
+//! {"token":"…","method":"reload"}             (glyphclub-cli changed the catalog)
+//! {"token":"…","method":"ui","command":"view","args":["list"]}
+//!   -> {"ok":true,"state":{…}}                 (glyphclub-cli driving the UI)
 //! ```
 //!
 //! Requests that need the app are sent over a channel the gpui side drains
@@ -43,6 +46,15 @@ pub enum BridgeEvent {
     Activate {
         fonts: Vec<String>,
         reply: mpsc::Sender<ActivateOutcome>,
+    },
+    /// The catalog changed outside the app (glyphclub-cli).
+    Reload,
+    /// A UI command from glyphclub-cli; replies with the UI state or an
+    /// error.
+    Ui {
+        command: String,
+        args: Vec<String>,
+        reply: mpsc::Sender<Result<Value, String>>,
     },
 }
 
@@ -211,6 +223,27 @@ fn handle_method(request: &Value, events: &mpsc::Sender<BridgeEvent>) -> Value {
         Some("openIntegrations") => {
             let _ = events.send(BridgeEvent::OpenIntegrations);
             json!({ "ok": true })
+        }
+        Some("reload") => {
+            let _ = events.send(BridgeEvent::Reload);
+            json!({ "ok": true })
+        }
+        Some("ui") => {
+            let command = request.get("command").and_then(Value::as_str).unwrap_or("").to_string();
+            let args: Vec<String> = request
+                .get("args")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .unwrap_or_default();
+            let (reply, receive) = mpsc::channel();
+            if events.send(BridgeEvent::Ui { command, args, reply }).is_err() {
+                return error("GlyphClub is quitting");
+            }
+            match receive.recv_timeout(Duration::from_secs(20)) {
+                Ok(Ok(state)) => json!({ "ok": true, "state": state }),
+                Ok(Err(e)) => error(&e),
+                Err(_) => error("GlyphClub didn't answer in time"),
+            }
         }
         Some("show") => {
             let _ = events.send(BridgeEvent::Show);

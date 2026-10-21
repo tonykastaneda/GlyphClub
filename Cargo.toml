@@ -19,6 +19,12 @@ path = "src/main.rs"
 name = "GlyphClubNext"
 path = "src/next/main.rs"
 
+# glyphclub-cli: libraries, fonts and activation from the terminal, and
+# driving the running app's UI over its local bridge.
+[[bin]]
+name = "glyphclub-cli"
+path = "src/cli/main.rs"
+
 [dependencies]
 anyhow = "1"
 dirs = "7"
@@ -53,6 +59,8 @@ skrifa = "0.44"
 rfd = "0.15"
 # The gpui front end (src/next): gpui plus its component library.
 gpui-kit = "0.8.0"
+# glyphclub-cli's argument parsing.
+clap = { version = "4.6", features = ["derive"] }
 notify-debouncer-mini = "0.7.0"
 filetime = "0.2.29"
 # Local-time formatting for the list view's Date Added column.

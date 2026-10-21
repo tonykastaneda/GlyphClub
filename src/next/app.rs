@@ -33,7 +33,7 @@ pub const MAX_SIZE: f32 = 160.;
 pub const COMPACT_W: f32 = 900.;
 pub const DEFAULT_SAMPLE: &str = "Aa";
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DetailTab {
     Preview,
     Sizes,
@@ -103,6 +103,8 @@ pub struct GlyphClub {
     pub expand_all: bool,
     /// The grid's tiles: (family, style when families are expanded).
     pub grid_items: Vec<(usize, Option<usize>)>,
+    /// Columns in the grid's last layout (for scrolling to a tile).
+    pub last_cols: usize,
     pub plugin_update_noted: Option<String>,
     /// Windows and Linux have no global menu bar, so the menus are drawn
     /// in the toolbar instead.
@@ -232,6 +234,7 @@ impl GlyphClub {
             categories: HashMap::new(),
             expand_all: false,
             grid_items: Vec::new(),
+            last_cols: 1,
             plugin_update_noted: None,
             app_menu_bar: (!cfg!(target_os = "macos")).then(|| gpui_kit::component::menu::AppMenuBar::new(cx)),
             detail_features: Default::default(),
@@ -997,6 +1000,11 @@ impl GlyphClub {
             BridgeEvent::OpenIntegrations => {
                 cx.activate(true);
                 crate::settings_window::open(Some(crate::settings_window::Page::AutoActivation), cx);
+            }
+            BridgeEvent::Reload => self.reload(cx),
+            BridgeEvent::Ui { command, args, reply } => {
+                let result = self.handle_ui(&command, &args, window, cx);
+                let _ = reply.send(result);
             }
             BridgeEvent::PluginVersionSeen(seen) => {
                 // Once per session: an older plug-in than this build ships.

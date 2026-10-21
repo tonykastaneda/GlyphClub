@@ -13,6 +13,7 @@ mod illustrator;
 mod library;
 mod list;
 mod palette;
+mod remote;
 mod settings;
 mod settings_window;
 mod update;

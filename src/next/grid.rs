@@ -49,6 +49,7 @@ impl GlyphClub {
         } else {
             self.visible.iter().map(|&i| (i, None)).collect()
         };
+        self.last_cols = cols;
         let rows = self.grid_items.len().div_ceil(cols);
         let tile_h = 64. + s.preview_size * 1.75;
         // The room a preview has inside a tile: its share of the row, less

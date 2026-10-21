@@ -15,7 +15,7 @@ fn settings_path() -> PathBuf {
     dir.join("settings.json")
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Appearance {
     SystemDefault,
     Light,
@@ -24,7 +24,7 @@ pub enum Appearance {
 
 /// Same variant names as the old front end's `app::SortField`, which is
 /// what's in existing settings files.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum SortField {
     Enabled,
     Name,
@@ -58,7 +58,7 @@ impl SortField {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum ViewMode {
     Grid,
     List,
