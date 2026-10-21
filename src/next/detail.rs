@@ -238,7 +238,7 @@ impl GlyphClub {
                             .child(align_btn(IconName::TextAlignCenter, TextAlign::Center, self, cx))
                             .child(align_btn(IconName::TextAlignEnd, TextAlign::Right, self, cx))
                             .child(div().w(px(10.)))
-                            .child(div().flex_1().child(Slider::new(&self.detail_size)))
+                            .child(div().flex_1().child(Slider::new(&self.detail_size).bg(pal.select).text_color(gpui_kit::white())))
                             .child(
                                 div()
                                     .w(px(40.))

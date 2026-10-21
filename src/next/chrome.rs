@@ -296,7 +296,7 @@ impl GlyphClub {
                     .px(px(10.))
                     .gap(px(6.))
                     .child(div().text_size(px(10.)).text_color(pal.text_dim).child("A"))
-                    .child(div().flex_1().child(Slider::new(&self.size_slider)))
+                    .child(div().flex_1().child(Slider::new(&self.size_slider).bg(pal.select).text_color(gpui_kit::white())))
                     .child(div().text_size(px(14.)).text_color(pal.text_dim).child("A")),
             )
             .child(
