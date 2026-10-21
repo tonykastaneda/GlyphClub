@@ -29,6 +29,8 @@ use crate::update::{self, UpdateCheck};
 
 pub const MIN_SIZE: f32 = 24.;
 pub const MAX_SIZE: f32 = 160.;
+/// Narrower than this, the sidebar tucks away and the toolbar compacts.
+pub const COMPACT_W: f32 = 900.;
 pub const DEFAULT_SAMPLE: &str = "Aa";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -53,10 +55,19 @@ pub struct GlyphClub {
     pub anchor: Option<usize>,
     /// Fonts temporarily activated this session; deactivated on quit.
     pub temporary: HashSet<i64>,
+    /// Fonts the Illustrator plug-in had activated this session.
+    pub auto_activated: HashSet<i64>,
     /// Font files already handed to gpui's text system, and ones on the way.
     pub loaded: HashSet<i64>,
     pub pending: HashSet<i64>,
+    /// The sidebar as you left it (collapsed by hand or not).
     pub sidebar_open: bool,
+    /// Whether it's on screen this frame: a narrow window hides it unless
+    /// it was opened on purpose while narrow (`sidebar_forced`).
+    pub sidebar_shown: bool,
+    pub sidebar_forced: bool,
+    /// The window is narrow: toolbar buttons fold into the » menu.
+    pub compact: bool,
     pub info_open: bool,
     pub busy: Option<SharedString>,
     pub notices: Vec<(SharedString, bool)>,
@@ -185,9 +196,13 @@ impl GlyphClub {
             selected: HashSet::new(),
             anchor: None,
             temporary: HashSet::new(),
+            auto_activated: HashSet::new(),
             loaded: HashSet::new(),
             pending: HashSet::new(),
             sidebar_open: true,
+            sidebar_shown: true,
+            sidebar_forced: false,
+            compact: false,
             info_open: false,
             busy: None,
             notices: Vec::new(),
@@ -795,8 +810,11 @@ impl GlyphClub {
     }
 
     fn import_into(&mut self, folder: String, files: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let s = cx.global::<AppSettings>().0;
+        let (skip_dupes, activate) = (s.import_skip_duplicates, s.import_activate);
         self.run_job("Adding fonts…", move |c| {
             let (mut copied, mut skipped, mut failed) = (0, 0, 0);
+            let mut imported_names: Vec<String> = Vec::new();
             for src in &files {
                 let Some(name) = src.file_name() else { continue };
                 let dest = Path::new(&folder).join(name);
@@ -804,15 +822,46 @@ impl GlyphClub {
                     skipped += 1;
                     continue;
                 }
+                // PostScript names inside the file, for duplicate checks and
+                // activating it afterwards.
+                let names: Vec<String> = std::fs::read(src)
+                    .map(|data| {
+                        glyphclub::font::parse_faces(&data, src, 0, 0)
+                            .into_iter()
+                            .map(|f| f.postscript_name)
+                            .filter(|n| !n.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if skip_dupes
+                    && !names.is_empty()
+                    && names.iter().all(|n| !c.font_ids_for_postscript_name(n).unwrap_or_default().is_empty())
+                {
+                    skipped += 1;
+                    continue;
+                }
                 match std::fs::copy(src, &dest) {
-                    Ok(_) => copied += 1,
+                    Ok(_) => {
+                        copied += 1;
+                        imported_names.extend(names);
+                    }
                     Err(_) => failed += 1,
                 }
             }
             c.rescan()?;
+            if activate {
+                let active = c.active_ids().unwrap_or_default();
+                for name in &imported_names {
+                    for id in c.font_ids_for_postscript_name(name).unwrap_or_default() {
+                        if !active.contains(&id) {
+                            let _ = c.toggle_activation(id);
+                        }
+                    }
+                }
+            }
             let mut msg = format!("Added {copied} font{}", if copied == 1 { "" } else { "s" });
             if skipped > 0 {
-                msg.push_str(&format!(", {skipped} already there"));
+                msg.push_str(&format!(", {skipped} skipped (already in the library)"));
             }
             if failed > 0 {
                 msg.push_str(&format!(", {failed} couldn't be copied"));
@@ -821,10 +870,28 @@ impl GlyphClub {
         }, cx);
     }
 
-    pub fn deactivate_temporary(&mut self) {
+    /// On quit: temporary activations always go; plug-in activations and
+    /// manual ones per Settings ▸ Auto Activation ▸ Auto Deactivation.
+    pub fn deactivate_on_quit(&mut self, settings: &Settings) {
         let mut catalog = self.catalog.lock().unwrap();
         for id in self.temporary.drain() {
             let _ = catalog.force_deactivate(id);
+        }
+        if settings.deactivate_auto_on_quit {
+            for id in self.auto_activated.drain() {
+                let _ = catalog.force_deactivate(id);
+            }
+        }
+        if settings.deactivate_manual_on_quit {
+            let manual: Vec<i64> = catalog
+                .active_ids()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|id| !self.auto_activated.contains(id))
+                .collect();
+            for id in manual {
+                let _ = catalog.toggle_activation(id);
+            }
         }
     }
 
@@ -854,7 +921,10 @@ impl GlyphClub {
 
     /// The Illustrator plug-in's request: temporarily activate whatever the
     /// libraries have of the document's missing fonts.
+    /// The Illustrator plug-in's request: activate whatever the libraries
+    /// have of the document's missing fonts, per Settings ▸ Auto Activation.
     pub fn activate_for_illustrator(&mut self, fonts: Vec<String>, cx: &mut Context<Self>) -> ActivateOutcome {
+        let s = cx.global::<AppSettings>().0;
         let mut outcome = ActivateOutcome::default();
         let mut seen = HashSet::new();
         {
@@ -873,17 +943,36 @@ impl GlyphClub {
                     outcome.already_active.push(name);
                     continue;
                 }
-                match catalog.activate_temporarily(first) {
-                    Ok(_) => {
-                        self.lib.active.insert(first);
-                        self.temporary.insert(first);
-                        outcome.activated.push(name);
+                // The face itself, or its whole family.
+                let mut targets = vec![first];
+                if s.activate_entire_family {
+                    if let Some(fam) = self.lib.families.iter().find(|f| f.ids().any(|id| id == first)) {
+                        targets = fam.ids().filter(|id| !self.lib.active.contains(id)).collect();
                     }
-                    Err(_) => outcome.failed.push(name),
+                }
+                let mut ok = false;
+                for id in targets {
+                    // Kept only for the session unless auto-activated fonts
+                    // are set to stay after quitting.
+                    let result = if s.deactivate_auto_on_quit {
+                        catalog.activate_temporarily(id).map(|_| ())
+                    } else {
+                        catalog.toggle_activation(id).map(|_| ())
+                    };
+                    if result.is_ok() {
+                        ok |= id == first;
+                        self.lib.active.insert(id);
+                        self.auto_activated.insert(id);
+                    }
+                }
+                if ok {
+                    outcome.activated.push(name);
+                } else {
+                    outcome.failed.push(name);
                 }
             }
         }
-        if !outcome.activated.is_empty() {
+        if !outcome.activated.is_empty() && !s.silent_mode {
             let n = outcome.activated.len();
             self.notify(format!("Activated {n} font{} for Illustrator", if n == 1 { "" } else { "s" }));
         }
@@ -907,7 +996,7 @@ impl GlyphClub {
             }
             BridgeEvent::OpenIntegrations => {
                 cx.activate(true);
-                crate::settings_window::open(Some(crate::settings_window::Page::Integrations), cx);
+                crate::settings_window::open(Some(crate::settings_window::Page::AutoActivation), cx);
             }
             BridgeEvent::PluginVersionSeen(seen) => {
                 // Once per session: an older plug-in than this build ships.
@@ -1005,6 +1094,7 @@ impl GlyphClub {
             Appearance::Dark => true,
         };
         Theme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, Some(window), cx);
+        crate::palette::apply_brand(cx);
     }
 
     fn flush_notices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1105,7 +1195,13 @@ impl GlyphClub {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
-                this.sidebar_open = !this.sidebar_open;
+                if this.sidebar_shown {
+                    this.sidebar_open = false;
+                    this.sidebar_forced = false;
+                } else {
+                    this.sidebar_open = true;
+                    this.sidebar_forced = this.compact;
+                }
                 this.refresh_menus(cx);
                 cx.notify();
             }))
@@ -1176,6 +1272,11 @@ impl Render for GlyphClub {
         let pal = Palette::get(cx);
         let settings = cx.global::<AppSettings>().0;
         self.expand_all = settings.expand_families;
+        self.compact = f32::from(window.viewport_size().width) < COMPACT_W;
+        if !self.compact {
+            self.sidebar_forced = false;
+        }
+        self.sidebar_shown = self.sidebar_open && (!self.compact || self.sidebar_forced);
 
         let content = if self.visible.is_empty() {
             self.empty_state(&pal, cx).into_any_element()
@@ -1239,7 +1340,7 @@ impl Render for GlyphClub {
                     this.open_drop_picker(fonts, window, cx);
                 }
             }))
-            .when(self.sidebar_open, |d| d.child(self.sidebar(&pal, cx)))
+            .when(self.sidebar_shown, |d| d.child(self.sidebar(&pal, cx)))
             .child(
                 div()
                     .flex_1()

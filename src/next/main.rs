@@ -32,7 +32,7 @@ use crate::settings::{AppSettings, Settings};
 
 gpui_kit::assets::icon_assets!(
     ExtraIcons,
-    [Clock, Library, Monitor, Tag, LayoutGrid, List, TextCursorInput, TextAlignStart, TextAlignCenter, TextAlignEnd]
+    [Clock, Library, Monitor, Tag, LayoutGrid, List, TextCursorInput, TextAlignStart, TextAlignCenter, TextAlignEnd, Download, ChevronsRight]
 );
 
 struct AppAssets;
@@ -155,7 +155,7 @@ fn main() {
             .open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    window_min_size: Some(size(px(760.), px(480.))),
+                    window_min_size: Some(size(px(480.), px(420.))),
                     titlebar: Some(TitlebarOptions {
                         title: Some("GlyphClub".into()),
                         appears_transparent: true,
@@ -241,7 +241,8 @@ fn main() {
         .detach();
 
         cx.on_app_quit(move |cx| {
-            let _ = weak.update(cx, |this, _| this.deactivate_temporary());
+            let settings = cx.global::<AppSettings>().0;
+            let _ = weak.update(cx, |this, _| this.deactivate_on_quit(&settings));
             bridge::stop();
             async {}
         })

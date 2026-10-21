@@ -89,6 +89,14 @@ pub struct Settings {
     pub detail_width: f32,
     /// View ▸ Expand Font Families: every style gets its own tile/row.
     pub expand_families: bool,
+    // Settings > Import (dropping font files on the window).
+    pub import_skip_duplicates: bool,
+    pub import_activate: bool,
+    // Settings > Auto Activation (the Illustrator plug-in).
+    pub activate_entire_family: bool,
+    pub silent_mode: bool,
+    pub deactivate_auto_on_quit: bool,
+    pub deactivate_manual_on_quit: bool,
 }
 
 impl Default for Settings {
@@ -112,6 +120,12 @@ impl Default for Settings {
             sidebar_width: crate::chrome::SIDEBAR_MIN_W,
             detail_width: crate::detail::DETAIL_MIN_W,
             expand_families: false,
+            import_skip_duplicates: false,
+            import_activate: true,
+            activate_entire_family: true,
+            silent_mode: false,
+            deactivate_auto_on_quit: true,
+            deactivate_manual_on_quit: false,
         }
     }
 }
