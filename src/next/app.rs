@@ -121,7 +121,7 @@ impl GlyphClub {
             Library::default()
         });
         let settings = cx.global::<AppSettings>().0;
-        let sample = cx.new(|cx| InputState::new(window, cx).default_value(DEFAULT_SAMPLE));
+        let sample = cx.new(|cx| InputState::new(window, cx).placeholder("Font name").default_value(DEFAULT_SAMPLE));
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         let size_slider = cx.new(|_| {
             SliderState::new().min(MIN_SIZE).max(MAX_SIZE).default_value(settings.preview_size)
@@ -261,14 +261,17 @@ impl GlyphClub {
     }
 
     /// The sample text the previews show, never empty.
-    pub fn sample_text(&self, cx: &App) -> SharedString {
+    /// The preview text, or `None` when it's empty: then every preview
+    /// shows its own font's name.
+    pub fn sample_text(&self, cx: &App) -> Option<SharedString> {
         let s = self.sample.read(cx).value();
-        if s.trim().is_empty() { DEFAULT_SAMPLE.into() } else { s }
+        (!s.trim().is_empty()).then_some(s)
     }
 
     pub fn sample_chars(&self, cx: &App) -> Vec<u32> {
         let mut chars: Vec<u32> = self
             .sample_text(cx)
+            .unwrap_or_default()
             .chars()
             .filter(|c| !c.is_whitespace())
             .map(|c| c as u32)

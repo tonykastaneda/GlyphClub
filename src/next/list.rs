@@ -214,7 +214,7 @@ impl GlyphClub {
         &self,
         r: usize,
         row: Row,
-        sample: SharedString,
+        sample: Option<SharedString>,
         chars: &[u32],
         preview_w: f32,
         cols: Columns,
@@ -249,6 +249,10 @@ impl GlyphClub {
         let fg = if selected { pal.on_select } else { pal.text };
         let fg_dim = if selected { pal.on_select.opacity(0.75) } else { pal.text_dim };
 
+        let sample: SharedString = sample.unwrap_or_else(|| match face_k {
+            Some(_) => format!("{} {}", f.name, face.style).into(),
+            None => f.name.clone(),
+        });
         let sample = if ready {
             let font = crate::fit::preview_font(&f.name, face.weight, face.italic, FontFeatures::default());
             crate::fit::fit(window, &sample, font, PREVIEW_PX, preview_w)

@@ -37,7 +37,9 @@ impl GlyphClub {
         }
         let avail = avail.max(200.);
         let font_px = s.preview_size * 1.25;
-        let n_chars = sample.chars().count().max(2) as f32;
+        // With no preview text each tile shows its font's name; size the
+        // columns for a typical one.
+        let n_chars = sample.as_ref().map(|s| s.chars().count()).unwrap_or(12).max(2) as f32;
         let min_tile = (n_chars * font_px * 0.62 + 40.).max(220.);
         let cols = ((avail + GRID_GAP) / (min_tile + GRID_GAP)).floor().max(1.) as usize;
         // Expand Font Families: every style gets its own tile.
@@ -111,7 +113,7 @@ impl GlyphClub {
         pos: usize,
         idx: usize,
         face_k: Option<usize>,
-        sample: SharedString,
+        sample: Option<SharedString>,
         chars: &[u32],
         tile_h: f32,
         font_px: f32,
@@ -136,6 +138,10 @@ impl GlyphClub {
         };
         let group: SharedString = format!("tile-{pos}").into();
         let face_id = rep.id;
+        let sample: SharedString = sample.unwrap_or_else(|| match face_k {
+            Some(_) => format!("{} {}", f.name, rep.style).into(),
+            None => f.name.clone(),
+        });
         let sample = if ready {
             let font = crate::fit::preview_font(&f.name, rep.weight, rep.italic, FontFeatures::default());
             crate::fit::fit(window, &sample, font, font_px, preview_w)
