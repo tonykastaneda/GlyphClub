@@ -42,6 +42,8 @@ impl GlyphClub {
         div()
             .id(id)
             .h(px(30.))
+            // Rows keep their height when the sidebar overflows and scrolls.
+            .flex_shrink_0()
             .mx(px(10.))
             .px(px(10.))
             .flex()
@@ -68,6 +70,7 @@ impl GlyphClub {
 
     fn section_header(label: &'static str, pal: &Palette) -> Div {
         div()
+            .flex_shrink_0()
             .mt(px(18.))
             .mb(px(4.))
             .px(px(20.))
@@ -247,6 +250,7 @@ impl GlyphClub {
             div()
                 .id("icon-fonts")
                 .h(px(30.))
+                .flex_shrink_0()
                 .mx(px(10.))
                 .pl(px(2.))
                 .pr(px(10.))
