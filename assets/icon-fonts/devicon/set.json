@@ -1,0 +1,6 @@
+{
+  "name": "devicon",
+  "version": "2.17.0",
+  "license": "MIT",
+  "source": "https://cdn.jsdelivr.net/npm/devicon@2.17.0/fonts/devicon.ttf"
+}
