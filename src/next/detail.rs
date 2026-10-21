@@ -169,7 +169,7 @@ impl GlyphClub {
                     .items_center()
                     .gap(px(5.))
                     .text_size(px(11.))
-                    .when(on, |d| d.bg(pal.select).text_color(white()))
+                    .when(on, |d| d.bg(pal.select).text_color(pal.on_select))
                     .when(!on, |d| d.bg(pal.chip).text_color(pal.text).hover(|s| s.opacity(0.85)))
                     .when(active, |d| d.child(div().size(px(5.)).rounded_full().bg(pal.active_dot)))
                     .child(style)
@@ -415,7 +415,7 @@ impl GlyphClub {
                 .flex()
                 .items_center()
                 .text_size(px(10.))
-                .when(on, |d| d.bg(pal.select).text_color(white()))
+                .when(on, |d| d.bg(pal.select).text_color(pal.on_select))
                 .when(!on, |d| d.bg(pal.chip).text_color(pal.text))
                 .child(label)
                 .on_click(cx.listener(move |this, _, _, cx| {

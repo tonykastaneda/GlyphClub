@@ -92,7 +92,7 @@ impl GlyphClub {
         let s = cx.global::<AppSettings>().0;
         // The Preview column gets what's left after the fixed columns.
         let mut avail = f32::from(window.viewport_size().width) - 16.;
-        if self.sidebar_open {
+        if self.sidebar_shown {
             avail -= s.sidebar_width.clamp(crate::chrome::SIDEBAR_MIN_W, crate::chrome::SIDEBAR_MAX_W);
         }
         if self.info_open {
@@ -210,8 +210,8 @@ impl GlyphClub {
             .map(|d| d.with_timezone(&chrono::Local).format("%b %-d, %Y at %-I:%M %p").to_string())
             .unwrap_or_default();
         let category = self.categories.get(&face.id).copied().unwrap_or("");
-        let fg = if selected { white() } else { pal.text };
-        let fg_dim = if selected { white().opacity(0.85) } else { pal.text_dim };
+        let fg = if selected { pal.on_select } else { pal.text };
+        let fg_dim = if selected { pal.on_select.opacity(0.75) } else { pal.text_dim };
 
         let sample = if ready {
             let font = crate::fit::preview_font(&f.name, face.weight, face.italic, FontFeatures::default());

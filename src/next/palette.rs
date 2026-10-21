@@ -18,7 +18,10 @@ pub struct Palette {
     pub control: Hsla,
     pub chip: Hsla,
     pub bar: Hsla,
+    /// GlyphClub's lime: selection and every accent.
     pub select: Hsla,
+    /// Text and icons on top of `select`.
+    pub on_select: Hsla,
     pub stripe: Hsla,
     pub active_dot: Hsla,
     pub inactive_dot: Hsla,
@@ -27,6 +30,20 @@ pub struct Palette {
 
 fn hex(v: u32) -> Hsla {
     rgb(v).into()
+}
+
+/// Points gpui-component's own controls (checkboxes, switches, sliders,
+/// primary buttons, focus rings) at the lime too.
+pub fn apply_brand(cx: &mut App) {
+    let pal = Palette::get(cx);
+    let t = gpui_kit::component::Theme::global_mut(cx);
+    t.colors.primary = pal.select;
+    t.colors.primary_hover = pal.select.opacity(0.88);
+    t.colors.primary_active = pal.select.opacity(0.78);
+    t.colors.primary_foreground = pal.on_select;
+    t.colors.ring = pal.select;
+    t.colors.switch = pal.select;
+    t.colors.slider_bar = pal.select;
 }
 
 impl Palette {
@@ -45,9 +62,10 @@ impl Palette {
                 control: hex(0x2e2e31),
                 chip: hex(0x505053),
                 bar: hex(0x404043).opacity(0.96),
-                select: hex(0x2f6fde),
+                select: hex(0x9aff00),
+                on_select: hex(0x101010),
                 stripe: hex(0x29292b),
-                active_dot: hex(0x4cc24f),
+                active_dot: hex(0x9aff00),
                 inactive_dot: hex(0xdddddd),
                 banner: hex(0x24344f),
             }
@@ -65,9 +83,10 @@ impl Palette {
                 control: hex(0xffffff),
                 chip: hex(0xdedede),
                 bar: hex(0xffffff).opacity(0.97),
-                select: hex(0x2f6fde),
+                select: hex(0x5c8a00),
+                on_select: hex(0xffffff),
                 stripe: hex(0xefefef),
-                active_dot: hex(0x34a83a),
+                active_dot: hex(0x5c8a00),
                 inactive_dot: hex(0xc4c4c4),
                 banner: hex(0xdde8fb),
             }

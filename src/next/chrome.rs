@@ -175,11 +175,9 @@ impl GlyphClub {
                     .gap(px(2.))
                     .px(px(10.))
                     .on_mouse_down(MouseButton::Left, |ev, window, _| drag_or_zoom(ev, window))
-                    .child(icon_button("toggle-sidebar", IconName::PanelLeft, pal, cx.listener(|this, _, _, cx| {
-                        this.sidebar_open = false;
-                        this.refresh_menus(cx);
-                        cx.notify();
-                    }))),
+                    .child(icon_button("toggle-sidebar", IconName::PanelLeft, pal, |_, window, cx| {
+                        window.dispatch_action(Box::new(crate::actions::ToggleSidebar), cx)
+                    })),
             )
             .child(
                 div()
@@ -285,14 +283,12 @@ impl GlyphClub {
             .gap(px(8.))
             .px(px(14.))
             // Leaves room for the traffic lights when the sidebar is hidden.
-            .when(!self.sidebar_open, |d| d.pl(px(84.)))
+            .when(!self.sidebar_shown, |d| d.pl(px(84.)))
             .on_mouse_down(MouseButton::Left, |ev, window, _| drag_or_zoom(ev, window))
-            .when(!self.sidebar_open, |d| {
-                d.child(icon_button("show-sidebar", IconName::PanelLeft, pal, cx.listener(|this, _, _, cx| {
-                    this.sidebar_open = true;
-                    this.refresh_menus(cx);
-                    cx.notify();
-                })))
+            .when(!self.sidebar_shown, |d| {
+                d.child(icon_button("show-sidebar", IconName::PanelLeft, pal, |_, window, cx| {
+                    window.dispatch_action(Box::new(crate::actions::ToggleSidebar), cx)
+                }))
             })
             .child(
                 pill(pal)
@@ -307,11 +303,12 @@ impl GlyphClub {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .when_some(self.app_menu_bar.clone(), |d, bar| {
+                    .when_some(self.app_menu_bar.clone().filter(|_| !self.compact), |d, bar| {
                         d.child(div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(bar))
                     }),
             )
-            .child(
+            .when(self.compact, |d| d.child(self.overflow_menu(pal, cx)))
+            .when(!self.compact, |d| d.child(
                 round("tb-sample", IconName::TextCursorInput, s.show_sample_bar, pal)
                     .on_mouse_up(MouseButton::Left, |_, window, cx| window.dispatch_action(Box::new(ToggleSampleBar), cx)),
             )
@@ -331,9 +328,9 @@ impl GlyphClub {
             .child(
                 round("tb-info", IconName::Info, self.info_open, pal)
                     .on_mouse_up(MouseButton::Left, |_, window, cx| window.dispatch_action(Box::new(ToggleInfo), cx)),
-            )
+            ))
             .child(
-                pill(pal).w(px(230.)).px(px(10.)).child(
+                pill(pal).w(px(if self.compact { 170. } else { 230. })).px(px(10.)).child(
                     Input::new(&self.search)
                         .appearance(false)
                         .cleanable(true)
@@ -341,6 +338,70 @@ impl GlyphClub {
                         .small(),
                 ),
             )
+    }
+
+    /// The » button a narrow window shows in place of the toolbar buttons
+    /// (and, on Windows, the in-app menu bar).
+    fn overflow_menu(&self, pal: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::actions::*;
+        use gpui_kit::component::button::{Button, ButtonVariants};
+        use gpui_kit::component::menu::DropdownMenu;
+        let s = cx.global::<AppSettings>().0;
+        let info_open = self.info_open;
+        fn fire(label: &'static str, action: fn() -> Box<dyn Action>) -> PopupMenuItem {
+            PopupMenuItem::new(label).on_click(move |_, window, cx| window.dispatch_action(action(), cx))
+        }
+        div()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                Button::new("overflow")
+                    .icon(Icon::new(IconName::ChevronsRight))
+                    .ghost()
+                    .small()
+                    .dropdown_menu(move |menu, window, cx| {
+                        let view_mode = s.view_mode;
+                        let mut menu = menu
+                            .item(fire("Edit Preview", || Box::new(EditPreviewText)))
+                            .submenu("View", window, cx, move |m, _, _| {
+                                m.item(fire("as Grid", || Box::new(ViewGrid)).checked(view_mode == ViewMode::Grid))
+                                    .item(fire("as List", || Box::new(ViewList)).checked(view_mode == ViewMode::List))
+                            })
+                            .item(fire("Info Pane", || Box::new(ToggleInfo)).checked(info_open));
+                        if !cfg!(target_os = "macos") {
+                            // Windows has no global menu bar to fall back on.
+                            menu = menu
+                                .separator()
+                                .submenu("File", window, cx, |m, _, _| {
+                                    m.item(fire("Add Library…", || Box::new(AddLibrary)))
+                                        .item(fire("Sync Now", || Box::new(SyncNow)))
+                                        .item(fire("Export User Fonts…", || Box::new(ExportUserFonts)))
+                                        .separator()
+                                        .item(fire("Settings…", || Box::new(OpenSettings)))
+                                        .item(fire("Quit", || Box::new(Quit)))
+                                })
+                                .submenu("Font", window, cx, |m, _, _| {
+                                    m.item(fire("Activate", || Box::new(Activate)))
+                                        .item(fire("Activate Temporarily", || Box::new(ActivateTemporarily)))
+                                        .item(fire("Deactivate", || Box::new(Deactivate)))
+                                        .separator()
+                                        .item(fire("Star / Unstar", || Box::new(ToggleStar)))
+                                        .item(fire("Copy Font Name", || Box::new(CopyFontName)))
+                                        .item(fire("Export…", || Box::new(ExportSelected)))
+                                        .item(fire("Show in Finder", || Box::new(RevealSelected)))
+                                        .separator()
+                                        .item(fire("Remove from Fontlist", || Box::new(RemoveFromFontlist)))
+                                        .item(fire("Delete from Library…", || Box::new(DeleteSelected)))
+                                })
+                                .submenu("Help", window, cx, |m, _, _| {
+                                    m.item(fire("About GlyphClub", || Box::new(About)))
+                                        .item(fire("Check for Updates…", || Box::new(CheckForUpdates)))
+                                        .item(fire("GlyphClub on GitHub", || Box::new(OpenGitHub)))
+                                });
+                        }
+                        menu
+                    }),
+            )
+            .text_color(pal.text)
     }
 
     pub fn update_banner(&self, pal: &Palette, cx: &mut Context<Self>) -> Option<impl IntoElement> {
@@ -413,7 +474,7 @@ impl GlyphClub {
                 .flex()
                 .items_center()
                 .text_size(px(11.))
-                .when(s.hide_missing, |d| d.bg(pal.select).text_color(gpui_kit::white()))
+                .when(s.hide_missing, |d| d.bg(pal.select).text_color(pal.on_select))
                 .when(!s.hide_missing, |d| d.text_color(pal.text_dim).hover(|s| s.bg(pal.hover)))
                 .child("Hide missing")
                 .on_click(cx.listener(|this, _, _, cx| this.update_settings(cx, |s| s.hide_missing = !s.hide_missing))),

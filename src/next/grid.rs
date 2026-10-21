@@ -29,7 +29,7 @@ impl GlyphClub {
         // content: the sample text at the current size, at an average glyph
         // width. "Aa" gives many narrow columns, a long word a few wide ones.
         let mut avail = f32::from(window.viewport_size().width) - 28.;
-        if self.sidebar_open {
+        if self.sidebar_shown {
             avail -= s.sidebar_width.clamp(SIDEBAR_MIN_W, SIDEBAR_MAX_W);
         }
         if self.info_open {
