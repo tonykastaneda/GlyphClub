@@ -98,8 +98,17 @@ pub enum HitAction {
     /// panel — see `ui::about::draw`.
     CloseAbout,
     ToggleSetting(SettingToggle),
+    SetSettingsTab(crate::app::SettingsTab),
+    /// Settings ▸ Integrations: install (or update) the Illustrator
+    /// plug-in into `App::integrations.illustrators[i]`.
+    InstallIllustratorPlugin(usize),
+    UninstallIllustratorPlugin(usize),
     ToggleAppearanceDropdown,
     SetAppearance(crate::settings::Appearance),
+    /// Windows' hand-rolled View ▸ Sort by … items — see `set_sort`.
+    SetSort(crate::app::SortField),
+    /// "Hide missing" — see `App::toggle_hide_missing`.
+    ToggleHideMissing,
     /// A font tile/row's right-click menu — opens/closes the Tags submenu.
     ToggleTagsSubmenu,
     /// Toggles `tag_id` on `font_id` (the font context menu's own
@@ -113,6 +122,9 @@ pub enum HitAction {
     DismissUpdateBanner,
     /// The update banner's "Download" button.
     OpenUpdateDownload,
+    /// The Illustrator plug-in update banner's close / Update buttons.
+    DismissPluginBanner,
+    OpenIntegrations,
     /// Windows' hand-rolled File menu's "Check for Updates…" item —
     /// macOS gets the equivalent under its native app menu instead (see
     /// `native_menu::MenuAction::CheckForUpdate`).
@@ -506,7 +518,8 @@ pub fn draw(app: &mut App, text: &mut TextCx, width: f64, height: f64) -> Scene 
         about::draw(app, text, &mut scene, width, height);
     }
 
-    draw_update_banner(app, text, &mut scene, width, height);
+    let app_banner_h = draw_update_banner(app, text, &mut scene, width, height);
+    draw_plugin_update_banner(app, text, &mut scene, width, height - app_banner_h);
 
     // Drawn last: a real file delete is the one truly irreversible action
     // in this app, so its confirmation sits above every other overlay.
@@ -514,6 +527,9 @@ pub fn draw(app: &mut App, text: &mut TextCx, width: f64, height: f64) -> Scene 
         draw_delete_confirm(app, text, &mut scene, width, height);
     }
 
+    // After everything's drawn, so whatever this frame showed counts as
+    // recently used.
+    app.evict_previews(text);
     scene
 }
 
@@ -522,7 +538,7 @@ pub fn draw(app: &mut App, text: &mut TextCx, width: f64, height: f64) -> Scene 
 /// (what every grid/list tile renders its live preview in, distinct from
 /// the detail panel's own `preview_text`), plus quick-fill preset chips.
 fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: f64, height: f64) {
-    let card_w = 340.0;
+    let card_w = 440.0;
     let card_h = 100.0;
     let x0 = (width - card_w) / 2.0;
     let y0 = height - 24.0 - card_h;
@@ -634,6 +650,49 @@ fn draw_sample_picker(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
         });
         cx += w + 8.0;
     }
+
+    // "Hide missing", right-aligned: hides every font lacking a character
+    // of the sample text. It lives here because this is where someone
+    // types the unusual character that makes tiles fall back. Lime while
+    // on, and says how many it's hiding.
+    let label = if !app.hide_missing {
+        "Hide missing".to_string()
+    } else if app.hidden_missing_count > 0 {
+        format!("Hiding {}", format_count(app.hidden_missing_count))
+    } else {
+        "Hide missing".to_string()
+    };
+    let w = text.measure(&label, 12.5, None) + 22.0;
+    let r = Rect::new(card.x1 - 16.0 - w, chip_y, card.x1 - 16.0, chip_y + chip_h);
+    let hovered = r.contains(app.hover);
+    let (bg, fg) = if app.hide_missing {
+        let accent = theme::BRAND_ACCENT();
+        (if hovered { accent.with_alpha(0.85) } else { accent }, theme::CANVAS())
+    } else if hovered {
+        (theme::CONTROL_HOVER_SUBTLE(), theme::TEXT())
+    } else {
+        (theme::CONTROL_BG(), theme::TEXT_SECONDARY())
+    };
+    fill_rect(scene, r, bg, chip_h / 2.0);
+    if !app.hide_missing {
+        stroke_rect(scene, r, theme::CONTROL_BORDER(), chip_h / 2.0, 1.0);
+    }
+    let tw = text.measure(&label, 12.5, None);
+    text.draw_centered_v(scene, &label, 12.5, None, fg, r.x0 + (w - tw) / 2.0, r.y0, r.y1);
+    app.hit_regions.push(HitRegion { rect: r, action: HitAction::ToggleHideMissing });
+}
+
+/// 1203 -> "1,203".
+fn format_count(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// How long the cards take to fan out (and the glow to ease in) once a
@@ -695,12 +754,69 @@ fn draw_drag_hover(
 /// `App::update_available` (see `check_for_update`) has an answer and the
 /// user hasn't already closed it this session. No auto-download/install:
 /// the button just opens the releases page in the system browser.
-fn draw_update_banner(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: f64, height: f64) {
-    if app.update_dismissed {
+/// Settings ▸ Integrations, from the plug-in update banner or from the
+/// plug-in itself (its panel's "Open Glyph Club" — see
+/// `AppEvent::OpenIntegrations`).
+pub fn open_integrations(app: &mut App) {
+    app.open_win_menu = None;
+    app.settings_open = true;
+    app.settings_tab = crate::app::SettingsTab::Integrations;
+    app.integrations.refresh();
+}
+
+/// Same card as `draw_update_banner`, stacked above it when both show:
+/// the Illustrator plug-in installed here is older than the one this
+/// GlyphClub ships, and only GlyphClub can install the new one.
+fn draw_plugin_update_banner(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: f64, height: f64) {
+    if app.integrations.banner_dismissed || app.settings_open {
         return;
     }
-    let Some(version) = app.update_available.clone() else {
+    let Some(version) = app.integrations.update_available() else {
         return;
+    };
+    let pad = 16.0;
+    let card_w = 260.0;
+    let card_h = 108.0;
+    let card = Rect::new(width - 20.0 - card_w, height - 20.0 - card_h, width - 20.0, height - 20.0);
+    fill_rect(scene, card, theme::SIDEBAR_BG(), 14.0);
+    stroke_rect(scene, card, theme::CONTROL_BORDER(), 14.0, 1.0);
+
+    text.draw(scene, "Illustrator plug-in update", 13.0, None, theme::TEXT(), card.x0 + pad, card.y0 + 26.0);
+    let subtitle = format!("Version {version} is ready to install");
+    text.draw(scene, &subtitle, 11.5, None, theme::TEXT_SECONDARY(), card.x0 + pad, card.y0 + 46.0);
+
+    let close_rect = Rect::new(card.x1 - 30.0, card.y0 + 4.0, card.x1 - 6.0, card.y0 + 28.0);
+    if close_rect.contains(app.hover) {
+        fill_rect(scene, close_rect, theme::NAV_HOVER_BG(), 6.0);
+    }
+    let (ccx, ccy) = (close_rect.center().x, close_rect.center().y);
+    let s = 3.6;
+    let close_color = theme::TEXT_SECONDARY();
+    scene.stroke(&Stroke::new(1.3), Affine::IDENTITY, close_color, None, &Line::new((ccx - s, ccy - s), (ccx + s, ccy + s)));
+    scene.stroke(&Stroke::new(1.3), Affine::IDENTITY, close_color, None, &Line::new((ccx - s, ccy + s), (ccx + s, ccy - s)));
+    app.hit_regions.push(HitRegion { rect: close_rect, action: HitAction::DismissPluginBanner });
+
+    let btn = Rect::new(card.x0 + pad, card.y0 + 64.0, card.x1 - pad, card.y0 + 92.0);
+    let btn_color = if btn.contains(app.hover) {
+        theme::BRAND_ACCENT().with_alpha(0.85)
+    } else {
+        theme::BRAND_ACCENT()
+    };
+    fill_rect(scene, btn, btn_color, 13.0);
+    let label = "Update";
+    let tw = text.measure(label, 12.5, None);
+    text.draw_centered_v(scene, label, 12.5, None, theme::CANVAS(), btn.x0 + (btn.width() - tw) / 2.0, btn.y0, btn.y1);
+    app.hit_regions.push(HitRegion { rect: btn, action: HitAction::OpenIntegrations });
+}
+
+/// Returns the height it took up (card plus gap), 0 when hidden, so the
+/// plug-in banner can stack above it.
+fn draw_update_banner(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: f64, height: f64) -> f64 {
+    if app.update_dismissed {
+        return 0.0;
+    }
+    let Some(version) = app.update_available.clone() else {
+        return 0.0;
     };
 
     let pad = 16.0;
@@ -737,6 +853,7 @@ fn draw_update_banner(app: &mut App, text: &mut TextCx, scene: &mut Scene, width
     let tw = text.measure(label, 12.5, None);
     text.draw_centered_v(scene, label, 12.5, None, theme::CANVAS(), btn.x0 + (btn.width() - tw) / 2.0, btn.y0, btn.y1);
     app.hit_regions.push(HitRegion { rect: btn, action: HitAction::OpenUpdateDownload });
+    card_h + 12.0
 }
 
 fn draw_drop_flash(scene: &mut Scene, text: &mut TextCx, width: f64, height: f64) {
@@ -1635,6 +1752,14 @@ fn draw_windows_menu_dropdown(app: &mut App, text: &mut TextCx, scene: &mut Scen
             (Some("as Grid"), true, Some(HitAction::SetViewMode(ViewMode::Grid))),
             (Some("as List"), true, Some(HitAction::SetViewMode(ViewMode::List))),
             (None, true, None),
+            (Some("Sort by Enabled"), true, Some(HitAction::SetSort(crate::app::SortField::Enabled))),
+            (Some("Sort by Name"), true, Some(HitAction::SetSort(crate::app::SortField::Name))),
+            (Some("Sort by Tags"), true, Some(HitAction::SetSort(crate::app::SortField::Tags))),
+            (Some("Sort by Date Added"), true, Some(HitAction::SetSort(crate::app::SortField::DateAdded))),
+            (Some("Sort by Starred"), true, Some(HitAction::SetSort(crate::app::SortField::Starred))),
+            (None, true, None),
+            (Some("Hide Fonts Missing Characters"), true, Some(HitAction::ToggleHideMissing)),
+            (None, true, None),
             (Some("Show Font Info"), true, Some(HitAction::ToggleDetailPanel)),
             (None, true, None),
             (Some("Zoom In"), true, Some(HitAction::ZoomIn)),
@@ -1713,7 +1838,9 @@ fn draw_windows_menu_dropdown(app: &mut App, text: &mut TextCx, scene: &mut Scen
             fill_rect(scene, row, theme::NAV_HOVER_BG(), 6.0);
         }
         let checked = (label == "as Grid" && app.view_mode == ViewMode::Grid)
-            || (label == "as List" && app.view_mode == ViewMode::List);
+            || (label == "as List" && app.view_mode == ViewMode::List)
+            || matches!(action, HitAction::SetSort(field) if field == app.list_sort.column)
+            || (matches!(action, HitAction::ToggleHideMissing) && app.hide_missing);
         let label_x = row.x0 + if checked { 28.0 } else { 12.0 };
         if checked {
             text.draw_centered_v(scene, "\u{2713}", 12.0, None, theme::TEXT(), row.x0 + 12.0, row.y0, row.y1);
@@ -2059,6 +2186,7 @@ pub fn handle_click(app: &mut App, point: Point) -> bool {
         HitAction::OpenSettings => {
             app.open_win_menu = None;
             app.settings_open = true;
+            app.integrations.refresh();
         }
         HitAction::CloseSettings => {
             app.settings_open = false;
@@ -2073,6 +2201,25 @@ pub fn handle_click(app: &mut App, point: Point) -> bool {
         HitAction::ToggleSetting(which) => {
             settings::apply_toggle(app, *which);
         }
+        HitAction::DismissPluginBanner => app.integrations.banner_dismissed = true,
+        HitAction::ToggleHideMissing => {
+            app.open_win_menu = None;
+            app.toggle_hide_missing();
+        }
+        HitAction::SetSort(field) => {
+            app.open_win_menu = None;
+            set_sort(app, *field);
+        }
+        HitAction::OpenIntegrations => open_integrations(app),
+        HitAction::SetSettingsTab(tab) => {
+            app.settings_tab = *tab;
+            app.appearance_dropdown_open = false;
+            if *tab == crate::app::SettingsTab::Integrations {
+                app.integrations.refresh();
+            }
+        }
+        HitAction::InstallIllustratorPlugin(i) => settings::install_illustrator_plugin(app, *i),
+        HitAction::UninstallIllustratorPlugin(i) => settings::uninstall_illustrator_plugin(app, *i),
         HitAction::ToggleAppearanceDropdown => {
             app.appearance_dropdown_open = !app.appearance_dropdown_open;
         }
@@ -2124,16 +2271,30 @@ pub fn handle_click(app: &mut App, point: Point) -> bool {
 /// natural default direction (newest/most-first for Styles/Favorite/Date
 /// Added, alphabetical for the rest).
 fn apply_sort_click(app: &mut App, column: crate::app::ListColumnKind) {
-    use crate::app::ListColumnKind;
-    if app.list_sort.column == column {
+    let field = column.sort_field();
+    if app.list_sort.column == field {
         app.list_sort.ascending = !app.list_sort.ascending;
+        save_sort(app);
         return;
     }
-    let ascending = !matches!(
-        column,
-        ListColumnKind::Styles | ListColumnKind::Favorite | ListColumnKind::DateAdded
-    );
-    app.list_sort = crate::app::ListSort { column, ascending };
+    set_sort(app, field);
+}
+
+/// View ▸ Sort By: sorts both views by `field`, in its natural direction
+/// (see `SortField::default_ascending`), and remembers it.
+pub fn set_sort(app: &mut App, field: crate::app::SortField) {
+    app.list_sort = crate::app::ListSort {
+        column: field,
+        ascending: field.default_ascending(),
+    };
+    app.scroll_y = 0.0;
+    save_sort(app);
+}
+
+fn save_sort(app: &mut App) {
+    app.settings.sort_field = app.list_sort.column;
+    app.settings.sort_ascending = app.list_sort.ascending;
+    app.settings.save();
 }
 
 /// Called on pointer motion while `app.header_press` or
@@ -2521,6 +2682,50 @@ pub fn activate_selected_temporarily(app: &mut App) {
     }
 }
 
+/// What the Illustrator plug-in's request (see `illustrator_bridge`) runs:
+/// temporarily activates the first catalogued face for each PostScript
+/// name, the same way Font ▸ Activate Temporarily does, so it's cleaned
+/// up when GlyphClub quits instead of piling up in the user's fonts.
+/// Faces that are already active (including system fonts) are left alone.
+pub fn activate_for_illustrator(
+    app: &mut App,
+    fonts: Vec<String>,
+) -> crate::illustrator_bridge::ActivateOutcome {
+    let mut outcome = crate::illustrator_bridge::ActivateOutcome::default();
+    let mut seen = std::collections::HashSet::new();
+    for name in fonts {
+        let name = name.trim().to_string();
+        if name.is_empty() || !seen.insert(name.clone()) {
+            continue;
+        }
+        let ids = app.catalog.font_ids_for_postscript_name(&name).unwrap_or_default();
+        let Some(&first) = ids.first() else {
+            outcome.not_found.push(name);
+            continue;
+        };
+        if ids.iter().any(|id| app.active_ids.contains(id)) {
+            outcome.already_active.push(name);
+            continue;
+        }
+        match app.catalog.activate_temporarily(first) {
+            Ok(_) => {
+                app.active_ids.insert(first);
+                app.temp_active_ids.insert(first);
+                outcome.activated.push(name);
+            }
+            Err(_) => outcome.failed.push(name),
+        }
+    }
+    if !outcome.activated.is_empty() {
+        let count = outcome.activated.len();
+        app.status = format!(
+            "Activated {count} font{} for Illustrator",
+            if count == 1 { "" } else { "s" }
+        );
+    }
+    outcome
+}
+
 pub fn toggle_selected_favorite(app: &mut App) {
     if let Some(id) = app.selected {
         toggle_favorite(app, id);
@@ -2608,6 +2813,7 @@ fn open_url(url: &str) {
 /// menu's Quit item, `WindowEvent::CloseRequested`) through this before
 /// calling `event_loop.exit()`, rather than any of them exiting directly.
 pub fn cleanup_before_quit(app: &mut App) {
+    crate::illustrator_bridge::stop();
     for id in std::mem::take(&mut app.temp_active_ids) {
         let _ = app.catalog.force_deactivate(id);
     }

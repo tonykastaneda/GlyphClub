@@ -58,10 +58,17 @@ pub fn draw_grid(
         favorites_version: app.favorites_version,
         filter: app.filter,
         search: app.search.clone(),
+        sort: app.list_sort,
+        sort_signature: app.sort_signature(),
+        coverage_signature: app.coverage_signature(),
     };
     let ids = match app.visible_ids_cache.take() {
         Some((cached_key, ids)) if cached_key == ids_key => ids,
-        _ => app.visible_entries().iter().map(|e| e.id).collect(),
+        _ => {
+            let (ids, hidden) = app.sorted_visible_ids();
+            app.hidden_missing_count = hidden;
+            ids
+        }
     };
     let total = ids.len();
 
@@ -178,7 +185,7 @@ fn draw_tile(
     } else {
         app.preview_family(text, id)
     };
-    let sample_color = if covers_sample { theme::TEXT() } else { theme::TEXT_TERTIARY() };
+    let sample_color = if covers_sample { theme::TEXT() } else { theme::MISSING_GLYPH() };
     // Every tile in the grid shares this one ground line regardless of
     // which font it's previewing — different fonts have different
     // ascent-to-size ratios, so lining them up by baseline (not by the

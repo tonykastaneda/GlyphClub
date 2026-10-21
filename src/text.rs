@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parley::editing::{PlainEditor, PlainEditorDriver};
-use parley::fontique::Blob;
+use parley::fontique::{Blob, FamilyId, FontStyle, FontWeight, FontWidth};
 use parley::{
     FontContext, FontFamily, GenericFamily, Layout, LayoutContext, PositionedLayoutItem,
     StyleProperty,
@@ -27,6 +27,15 @@ use vello::{Glyph, Scene};
 /// rather than kept as a true LRU: simple, and a 150k-entry library means
 /// unbounded growth is a real risk otherwise.
 const LAYOUT_CACHE_CAP: usize = 4096;
+
+/// One face `TextCx::register_font_bytes` added, identified the way
+/// fontique's `unregister_font` wants it.
+pub struct RegisteredFace {
+    family: FamilyId,
+    width: FontWidth,
+    style: FontStyle,
+    weight: FontWeight,
+}
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct LayoutKey {
@@ -63,18 +72,45 @@ impl TextCx {
     }
 
     /// Registers a font file's raw bytes with the font database and returns
-    /// the family name fontique parsed out of it. Pass that name to
+    /// the family name fontique parsed out of it, plus what
+    /// `unregister_faces` needs to take it back out. Pass that name to
     /// [`Self::draw`]/[`Self::measure`] via `family` to target this exact
     /// font — this is the catalog's live-preview path: nothing here reads
     /// from a system font list.
-    pub fn register_font_bytes(&mut self, bytes: Vec<u8>) -> Option<String> {
+    pub fn register_font_bytes(&mut self, bytes: Vec<u8>) -> Option<(String, Vec<RegisteredFace>)> {
         let blob = Blob::new(Arc::new(bytes));
         let registered = self.fonts.collection.register_fonts(blob, None);
+        let faces: Vec<RegisteredFace> = registered
+            .iter()
+            .flat_map(|(family, fonts)| {
+                fonts.iter().map(|font| RegisteredFace {
+                    family: *family,
+                    width: font.width(),
+                    style: font.style(),
+                    weight: font.weight(),
+                })
+            })
+            .collect();
         let (family_id, _) = registered.into_iter().next()?;
-        self.fonts
-            .collection
-            .family(family_id)
-            .map(|f| f.name().to_string())
+        let name = self.fonts.collection.family(family_id).map(|f| f.name().to_string())?;
+        Some((name, faces))
+    }
+
+    /// Drops fonts `register_font_bytes` added — the preview cache's
+    /// eviction (see `App::evict_previews`), which is what lets their file
+    /// data be freed.
+    pub fn unregister_faces(&mut self, faces: &[RegisteredFace]) {
+        for face in faces {
+            self.fonts
+                .collection
+                .unregister_font(face.family, face.width, face.style, face.weight);
+        }
+    }
+
+    /// Cached layouts hold on to the fonts they were shaped with, so after
+    /// unregistering fonts this is what actually lets them go.
+    pub fn clear_layout_cache(&mut self) {
+        self.cache.clear();
     }
 
     fn build(

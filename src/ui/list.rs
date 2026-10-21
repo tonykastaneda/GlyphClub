@@ -10,7 +10,7 @@ use vello::Scene;
 
 use super::grid::{draw_empty_state, draw_scrollbar, draw_system_lock};
 use super::{draw_format_badge, fill_rect, stroke_rect, truncate_to_width, HitAction, HitRegion};
-use crate::app::{App, FamilyGroup, FontEntry, ListColumnKind, ListGroupsCacheKey, ListSort};
+use crate::app::{App, FamilyGroup, FontEntry, ListColumnKind, ListGroupsCacheKey, ListSort, SortField};
 use crate::text::TextCx;
 use crate::theme;
 
@@ -38,9 +38,14 @@ fn format_date(mtime: i64) -> String {
 /// hundred thousand-plus fonts — was the single biggest reason list view
 /// used to choke). Only actually called when `App::list_groups_cache` is
 /// stale (see `draw_list`), not on every frame.
-fn rebuild_family_groups(app: &App) -> Vec<FamilyGroup> {
-    let visible: std::collections::HashSet<i64> =
-        app.visible_entries().into_iter().map(|e| e.id).collect();
+fn rebuild_family_groups(app: &App) -> (Vec<FamilyGroup>, usize) {
+    let (visible, hidden) = app.filtered_visible_entries();
+    let visible: std::collections::HashSet<i64> = visible.into_iter().map(|e| e.id).collect();
+    let first_tag = if app.list_sort.column == crate::app::SortField::Tags {
+        app.first_tag_names()
+    } else {
+        std::collections::HashMap::new()
+    };
 
     // `order` keeps first-seen family order stable regardless of hash
     // iteration order, so a family's position doesn't jitter between
@@ -58,7 +63,7 @@ fn rebuild_family_groups(app: &App) -> Vec<FamilyGroup> {
         members.push(entry);
     }
 
-    order
+    let groups = order
         .into_iter()
         .map(|family| {
             let mut members = by_family.remove(family).unwrap_or_default();
@@ -70,6 +75,8 @@ fn rebuild_family_groups(app: &App) -> Vec<FamilyGroup> {
                 .unwrap_or(members[0]);
             let newest_mtime = members.iter().map(|e| e.mtime).max().unwrap_or(0);
             let any_favorite = members.iter().any(|e| app.favorite_ids.contains(&e.id));
+            let any_active = members.iter().any(|e| app.active_ids.contains(&e.id));
+            let first_tag = members.iter().filter_map(|e| first_tag.get(&e.id)).min().cloned();
             let family = family.to_string();
             FamilyGroup {
                 family_sort_key: family.to_ascii_lowercase(),
@@ -78,10 +85,13 @@ fn rebuild_family_groups(app: &App) -> Vec<FamilyGroup> {
                 format: crate::font::format_label(&primary.path),
                 newest_mtime,
                 any_favorite,
+                any_active,
+                first_tag,
                 family,
             }
         })
-        .collect()
+        .collect();
+    (groups, hidden)
 }
 
 fn sort_family_groups(groups: &mut [FamilyGroup], sort: ListSort) {
@@ -90,12 +100,14 @@ fn sort_family_groups(groups: &mut [FamilyGroup], sort: ListSort) {
         // lowercased `family` — the naive version allocated two new
         // `String`s per comparison, every sort, for nothing.
         let ordering = match sort.column {
-            ListColumnKind::Name | ListColumnKind::Preview => a.family_sort_key.cmp(&b.family_sort_key),
-            ListColumnKind::Styles => a.member_ids.len().cmp(&b.member_ids.len()),
-            ListColumnKind::Favorite => a.any_favorite.cmp(&b.any_favorite),
-            ListColumnKind::Format => a.format.cmp(b.format),
-            ListColumnKind::Category => std::cmp::Ordering::Equal,
-            ListColumnKind::DateAdded => a.newest_mtime.cmp(&b.newest_mtime),
+            SortField::Name => a.family_sort_key.cmp(&b.family_sort_key),
+            SortField::Styles => a.member_ids.len().cmp(&b.member_ids.len()),
+            SortField::Starred => a.any_favorite.cmp(&b.any_favorite),
+            SortField::Enabled => a.any_active.cmp(&b.any_active),
+            SortField::Tags => crate::app::tag_order(a.first_tag.as_ref(), b.first_tag.as_ref()),
+            SortField::Format => a.format.cmp(b.format),
+            SortField::Category => std::cmp::Ordering::Equal,
+            SortField::DateAdded => a.newest_mtime.cmp(&b.newest_mtime),
         };
         if sort.ascending {
             ordering
@@ -159,11 +171,14 @@ pub fn draw_list(
         filter: app.filter,
         search: app.search.clone(),
         sort: app.list_sort,
+        sort_signature: app.sort_signature(),
+        coverage_signature: app.coverage_signature(),
     };
     let groups = match app.list_groups_cache.take() {
         Some((cached_key, groups)) if cached_key == key => groups,
         _ => {
-            let mut groups = rebuild_family_groups(app);
+            let (mut groups, hidden) = rebuild_family_groups(app);
+            app.hidden_missing_count = hidden;
             sort_family_groups(&mut groups, app.list_sort);
             groups
         }
@@ -263,7 +278,7 @@ fn draw_header(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1:
                 cell.y0,
                 cell.y1,
             );
-            if app.list_sort.column == col.kind {
+            if col.kind != ListColumnKind::Preview && app.list_sort.column == col.kind.sort_field() {
                 let arrow_x = label_x + text.measure(label, 12.5, None) + 10.0;
                 draw_sort_arrow(
                     scene,
@@ -483,7 +498,7 @@ fn draw_family_row(
                 let sample = app.effective_sample_text();
                 let size = (18.0 * ctx.s).clamp(13.0, 30.0);
                 let preview_font = if covers_sample { family_font.as_deref() } else { None };
-                let preview_color = if covers_sample { text_color } else { theme::TEXT_TERTIARY() };
+                let preview_color = if covers_sample { text_color } else { theme::MISSING_GLYPH() };
                 text.draw_centered_v(
                     scene,
                     sample,
@@ -576,7 +591,7 @@ fn draw_style_row(
                 let sample = app.effective_sample_text();
                 let size = (16.0 * ctx.s).clamp(11.0, 26.0);
                 let preview_font = if covers_sample { style_font.as_deref() } else { None };
-                let preview_color = if covers_sample { text_color } else { theme::TEXT_TERTIARY() };
+                let preview_color = if covers_sample { text_color } else { theme::MISSING_GLYPH() };
                 text.draw_centered_v(
                     scene,
                     sample,

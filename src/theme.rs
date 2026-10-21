@@ -34,6 +34,10 @@ struct Palette {
     text: Color,
     text_secondary: Color,
     text_tertiary: Color,
+    /// A preview's stand-in text when the font lacks glyphs for the sample
+    /// (see `ui::grid`) — well below `text_tertiary` so it can't be
+    /// mistaken for a real, supported preview.
+    missing_glyph: Color,
     separator: Color,
     control_bg: Color,
     control_bg_hover: Color,
@@ -60,6 +64,7 @@ const DARK: Palette = Palette {
     text: Color::from_rgb8(0xf5, 0xf5, 0xf7),
     text_secondary: Color::from_rgb8(0xc3, 0xc3, 0xc8),
     text_tertiary: Color::from_rgb8(0x98, 0x98, 0x9f),
+    missing_glyph: Color::from_rgb8(0x27, 0x27, 0x28),
     separator: Color::from_rgba8(0xff, 0xff, 0xff, 0x1c),
     control_bg: Color::from_rgba8(0xff, 0xff, 0xff, 0x0e),
     control_bg_hover: Color::from_rgba8(0xff, 0xff, 0xff, 0x1c),
@@ -96,6 +101,7 @@ const LIGHT: Palette = Palette {
     text: Color::from_rgb8(0x1c, 0x1c, 0x1e),
     text_secondary: Color::from_rgb8(0x48, 0x48, 0x4a),
     text_tertiary: Color::from_rgb8(0x8e, 0x8e, 0x93),
+    missing_glyph: Color::from_rgb8(0xcc, 0xcc, 0xd1),
     separator: Color::from_rgba8(0x00, 0x00, 0x00, 0x14),
     control_bg: Color::from_rgba8(0x00, 0x00, 0x00, 0x06),
     control_bg_hover: Color::from_rgba8(0x00, 0x00, 0x00, 0x0c),
@@ -171,6 +177,9 @@ pub fn TEXT_SECONDARY() -> Color {
 }
 pub fn TEXT_TERTIARY() -> Color {
     current().text_tertiary
+}
+pub fn MISSING_GLYPH() -> Color {
+    current().missing_glyph
 }
 pub fn SEPARATOR() -> Color {
     current().separator

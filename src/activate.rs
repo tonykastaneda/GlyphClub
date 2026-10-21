@@ -49,8 +49,12 @@ mod platform {
         dirs::font_dir()
     }
 
-    /// macOS watches `~/Library/Fonts` (via `fontd`), so a symlink dropped
-    /// there is enough to activate a font without copying the file.
+    /// Copies the file into `~/Library/Fonts`, which `fontd` watches.
+    /// A symlink would avoid the copy, but `fontd` never registers one
+    /// (checked on macOS 26: top level or subfolder, pointing into iCloud
+    /// or not), so the font would look active here and be missing
+    /// everywhere else. Copying also makes iCloud/Dropbox materialize a
+    /// cloud-only placeholder, which a symlink wouldn't.
     pub fn install(source: &Path, unique_name: &str) -> Result<PathBuf> {
         let dir = managed_dir()?;
         let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("ttf");
@@ -59,8 +63,8 @@ mod platform {
         if dest.symlink_metadata().is_ok() {
             std::fs::remove_file(&dest).ok();
         }
-        std::os::unix::fs::symlink(source, &dest)
-            .with_context(|| format!("failed to symlink {source:?} into {dest:?}"))?;
+        std::fs::copy(source, &dest)
+            .with_context(|| format!("failed to copy {source:?} to {dest:?}"))?;
 
         Ok(dest)
     }
@@ -79,21 +83,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn installs_and_uninstalls_a_symlink() {
+    fn installs_a_real_copy_and_uninstalls_it() {
         let source = Path::new("/System/Library/Fonts/Helvetica.ttc");
         let installed = install(source, "glyphclub-activation-test").expect("install should succeed");
 
-        assert!(
-            installed.symlink_metadata().is_ok(),
-            "expected a symlink at {installed:?}"
-        );
-        let target = std::fs::read_link(&installed).expect("should be a symlink");
-        assert_eq!(target, source);
+        let meta = installed.symlink_metadata().expect("installed file should exist");
+        assert!(meta.file_type().is_file(), "expected a real file, not a symlink, at {installed:?}");
+        assert_eq!(meta.len(), source.metadata().unwrap().len());
 
         uninstall(&installed).expect("uninstall should succeed");
         assert!(
             installed.symlink_metadata().is_err(),
-            "symlink should be gone after uninstall"
+            "installed copy should be gone after uninstall"
         );
     }
 }

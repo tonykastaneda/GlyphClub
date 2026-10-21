@@ -23,10 +23,16 @@ mod activation_memory;
 mod app;
 mod branding;
 mod catalog;
+mod coverage;
 mod font;
 mod font_export;
 mod font_info;
 mod gpu;
+mod illustrator_bridge;
+mod integrations;
+mod login_item;
+#[cfg(target_os = "macos")]
+mod macos_app;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod reveal;
@@ -35,9 +41,16 @@ mod settings;
 mod store;
 mod text;
 mod theme;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod tray;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
 mod ui;
+
+// muda's one menu-event channel, shared by the macOS menu bar and the menu
+// bar / tray icon — reached through tray-icon's re-export on both platforms.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use tray_icon::menu as muda_events;
 
 use app::{App, Focus};
 use catalog::Catalog;
@@ -83,6 +96,27 @@ pub(crate) enum AppEvent {
     /// File ▸ Export User Fonts…'s background copy finished (see
     /// `ui::export_user_fonts`).
     UserFontsExported(Result<font_export::ExportSummary, String>),
+    /// The Illustrator plug-in asked for fonts by PostScript name (see
+    /// `illustrator_bridge`). `reply` goes back to the connection thread
+    /// that's waiting to answer it.
+    /// A Settings ▸ Integrations install/uninstall finished (see
+    /// `ui::settings::install_illustrator_plugin`) — `Ok` carries the
+    /// message to show.
+    IntegrationFinished(Result<String, String>),
+    /// Show the window — the menu bar / tray icon's "Open GlyphClub", or
+    /// GlyphClub being opened again while it's running with none (macOS's
+    /// reopen event, or a second launch handing over — see `main`).
+    ShowWindow,
+    /// The Illustrator plug-in's panel asked to open Settings ▸
+    /// Integrations (its "Open Glyph Club" button, shown when it's out of
+    /// date).
+    OpenIntegrations,
+    /// A plug-in reported its version over the bridge.
+    PluginVersionSeen(String),
+    IllustratorActivate {
+        fonts: Vec<String>,
+        reply: std::sync::mpsc::Sender<illustrator_bridge::ActivateOutcome>,
+    },
 }
 
 struct WindowState {
@@ -99,25 +133,82 @@ struct Shell {
     modifiers: ModifiersState,
     #[cfg(target_os = "macos")]
     native_menu: Option<native_menu::NativeMenu>,
+    /// The menu bar / system tray icon, while that setting is on — see
+    /// `sync_tray`.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    tray: Option<tray::Tray>,
+    /// Start with the window hidden (Menu Bar / System Tray is on).
+    start_hidden: bool,
+    proxy: EventLoopProxy<AppEvent>,
+}
+
+/// Hides the window into the menu bar / tray icon. On macOS GlyphClub
+/// also leaves the Dock until the window comes back.
+fn hide_window(window: &Window) {
+    window.set_visible(false);
+    #[cfg(target_os = "macos")]
+    macos_app::set_in_dock(false, BRAND_ICON_PNG);
+}
+
+fn show_window(window: &Window) {
+    #[cfg(target_os = "macos")]
+    macos_app::set_in_dock(true, BRAND_ICON_PNG);
+    window.set_visible(true);
+    window.set_minimized(false);
+    window.focus_window();
+    window.request_redraw();
 }
 
 impl Shell {
-    fn new(proxy: EventLoopProxy<AppEvent>) -> Self {
+    fn new(proxy: EventLoopProxy<AppEvent>, start_hidden: bool) -> Self {
         let watcher_proxy = proxy.clone();
         let catalog = Catalog::open(move || {
             let _ = watcher_proxy.send_event(AppEvent::FoldersChanged);
         })
         .expect("open catalog database");
         app::check_for_update(proxy.clone(), false);
+        illustrator_bridge::start(proxy.clone());
         Self {
             gpu: Gpu::new(),
             text: TextCx::new(),
             state: None,
-            app: App::new(catalog, proxy),
+            app: App::new(catalog, proxy.clone()),
             cursor: Point::ZERO,
             modifiers: ModifiersState::empty(),
             #[cfg(target_os = "macos")]
             native_menu: None,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            tray: None,
+            start_hidden,
+            proxy,
+        }
+    }
+
+    /// Whether closing the window should hide it rather than quit.
+    fn has_tray(&self) -> bool {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        return self.tray.is_some();
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        false
+    }
+
+    /// Adds or removes the menu bar / tray icon to match the setting.
+    /// Turning it off while the window is hidden brings the window back,
+    /// since there'd be no other way to reach it.
+    fn sync_tray(&mut self) {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            let want = self.app.settings.menu_bar;
+            if want && self.tray.is_none() {
+                self.tray = tray::Tray::new();
+            } else if !want && self.tray.is_some() {
+                self.tray = None;
+                if let Some(state) = &self.state {
+                    if !state.window.is_visible().unwrap_or(true) {
+                        show_window(&state.window);
+                    }
+                }
+            }
         }
     }
 }
@@ -143,6 +234,8 @@ fn dispatch_menu_action(app: &mut App, action: native_menu::MenuAction) {
             app.view_mode = mode;
             app.scroll_y = 0.0;
         }
+        MenuAction::SortBy(field) => ui::set_sort(app, field),
+        MenuAction::ToggleHideMissing => app.toggle_hide_missing(),
         MenuAction::ToggleInfo => app.detail_open = !app.detail_open,
         MenuAction::ZoomIn => app.tile_size = (app.tile_size + 20.0).min(theme::MAX_TILE),
         MenuAction::ZoomOut => app.tile_size = (app.tile_size - 20.0).max(theme::MIN_TILE),
@@ -155,7 +248,10 @@ fn dispatch_menu_action(app: &mut App, action: native_menu::MenuAction) {
         MenuAction::RemoveFromFontlist => ui::remove_selected_from_fontlist(app),
         MenuAction::DeleteSelected => ui::request_delete_selected(app),
         MenuAction::OpenGitHub => ui::open_github_repo(),
-        MenuAction::OpenSettings => app.settings_open = true,
+        MenuAction::OpenSettings => {
+            app.settings_open = true;
+            app.integrations.refresh();
+        }
         MenuAction::Quit => unreachable!("intercepted in about_to_wait before dispatch"),
     }
 }
@@ -395,11 +491,16 @@ fn handle_traffic_light_click(
     window: &Window,
     event_loop: &ActiveEventLoop,
     point: Point,
+    close_hides: bool,
 ) -> bool {
     let [close, minimize, zoom] = app.traffic_light_rects;
     if close.contains(point) {
-        ui::cleanup_before_quit(app);
-        event_loop.exit();
+        if close_hides {
+            hide_window(window);
+        } else {
+            ui::cleanup_before_quit(app);
+            event_loop.exit();
+        }
         true
     } else if minimize.contains(point) {
         window.set_minimized(true);
@@ -422,7 +523,8 @@ impl ApplicationHandler<AppEvent> for Shell {
         let attrs = Window::default_attributes()
             .with_title("GlyphClub")
             .with_inner_size(winit::dpi::LogicalSize::new(1360.0, 860.0))
-            .with_min_inner_size(winit::dpi::LogicalSize::new(760.0, 480.0));
+            .with_min_inner_size(winit::dpi::LogicalSize::new(760.0, 480.0))
+            .with_visible(!self.start_hidden);
         // macOS: paint behind the title bar and drop its text so the
         // sidebar's own background can run up to the top of the window,
         // with only the traffic lights sitting on top of it. Windows keeps
@@ -450,7 +552,7 @@ impl ApplicationHandler<AppEvent> for Shell {
             traffic_lights::hide_native_buttons(&window);
             traffic_lights::disable_titlebar_drag(&window);
             traffic_lights::set_dock_icon(BRAND_ICON_PNG);
-            self.native_menu = Some(native_menu::NativeMenu::build(self.app.view_mode));
+            self.native_menu = Some(native_menu::NativeMenu::build(self.app.view_mode, self.app.list_sort.column));
         }
         #[cfg(target_os = "windows")]
         if let Some(icon) = load_window_icon() {
@@ -459,9 +561,17 @@ impl ApplicationHandler<AppEvent> for Shell {
         let surface = self.gpu.create_surface(window.clone());
         window.request_redraw();
         self.state = Some(WindowState { window, surface });
+
+        self.sync_tray();
+        #[cfg(target_os = "macos")]
+        macos_app::install_reopen_handler(self.proxy.clone());
+        if self.app.settings.launch_on_startup {
+            login_item::refresh();
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let has_tray = self.has_tray();
         let Some(state) = &mut self.state else { return };
         if state.window.id() != id {
             return;
@@ -470,10 +580,23 @@ impl ApplicationHandler<AppEvent> for Shell {
 
         match event {
             WindowEvent::CloseRequested => {
-                ui::cleanup_before_quit(&mut self.app);
-                event_loop.exit();
+                if has_tray {
+                    hide_window(&state.window);
+                } else {
+                    ui::cleanup_before_quit(&mut self.app);
+                    event_loop.exit();
+                }
             }
             WindowEvent::Resized(size) => {
+                // Windows: minimizing a tray app sends it to the tray.
+                #[cfg(target_os = "windows")]
+                if has_tray && state.window.is_minimized() == Some(true) {
+                    state.window.set_visible(false);
+                    return;
+                }
+                if size.width == 0 || size.height == 0 {
+                    return;
+                }
                 self.gpu.resize(&mut state.surface, size.width, size.height);
                 state.window.request_redraw();
             }
@@ -553,7 +676,7 @@ impl ApplicationHandler<AppEvent> for Shell {
                 ..
             } => {
                 #[cfg(target_os = "macos")]
-                if handle_traffic_light_click(&mut self.app, &state.window, event_loop, self.cursor) {
+                if handle_traffic_light_click(&mut self.app, &state.window, event_loop, self.cursor, has_tray) {
                     return;
                 }
                 #[cfg(target_os = "macos")]
@@ -676,9 +799,40 @@ impl ApplicationHandler<AppEvent> for Shell {
     /// `WindowEvent::HoveredFile`) — then drops `control_flow` back to
     /// `Wait` once neither needs it anymore.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.sync_tray();
+
+        // One drain of muda's shared event channel, offered to the tray
+        // menu first and the macOS menu bar with whatever's left.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        let menu_events = {
+            let menu_events: Vec<muda_events::MenuEvent> =
+                std::iter::from_fn(|| muda_events::MenuEvent::receiver().try_recv().ok()).collect();
+            let mut rest = Vec::new();
+            let mut open = tray::drain_icon_clicks();
+            for event in menu_events {
+                match self.tray.as_ref().and_then(|t| t.menu_action(&event)) {
+                    Some(tray::TrayAction::Open) => open = true,
+                    Some(tray::TrayAction::Quit) => {
+                        ui::cleanup_before_quit(&mut self.app);
+                        event_loop.exit();
+                        return;
+                    }
+                    None => rest.push(event),
+                }
+            }
+            if open {
+                if let Some(state) = &self.state {
+                    show_window(&state.window);
+                }
+            }
+            rest
+        };
+        #[cfg(target_os = "windows")]
+        let _ = menu_events;
+
         #[cfg(target_os = "macos")]
         if let Some(menu) = &self.native_menu {
-            let actions = menu.drain();
+            let actions = menu.actions_for(&menu_events);
             if !actions.is_empty() {
                 for action in actions {
                     // Quit needs `event_loop` (to actually exit) and to
@@ -692,7 +846,7 @@ impl ApplicationHandler<AppEvent> for Shell {
                     }
                     dispatch_menu_action(&mut self.app, action);
                 }
-                menu.sync_view(self.app.view_mode);
+                menu.sync_view(self.app.view_mode, self.app.list_sort.column, self.app.hide_missing);
                 if let Some(state) = &self.state {
                     state.window.request_redraw();
                 }
@@ -762,6 +916,43 @@ impl ApplicationHandler<AppEvent> for Shell {
                     state.window.request_redraw();
                 }
             }
+            AppEvent::IntegrationFinished(result) => {
+                self.app.integrations.busy = false;
+                self.app.integrations.message = Some(match result {
+                    Ok(message) => (message, false),
+                    Err(message) => (message, true),
+                });
+                self.app.integrations.refresh();
+                if let Some(state) = &self.state {
+                    state.window.request_redraw();
+                }
+            }
+            AppEvent::OpenIntegrations => {
+                ui::open_integrations(&mut self.app);
+                if let Some(state) = &self.state {
+                    show_window(&state.window);
+                }
+            }
+            AppEvent::PluginVersionSeen(version) => {
+                if self.app.integrations.connected_plugin_version.as_deref() != Some(version.as_str()) {
+                    self.app.integrations.connected_plugin_version = Some(version);
+                    if let Some(state) = &self.state {
+                        state.window.request_redraw();
+                    }
+                }
+            }
+            AppEvent::ShowWindow => {
+                if let Some(state) = &self.state {
+                    show_window(&state.window);
+                }
+            }
+            AppEvent::IllustratorActivate { fonts, reply } => {
+                let outcome = ui::activate_for_illustrator(&mut self.app, fonts);
+                let _ = reply.send(outcome);
+                if let Some(state) = &self.state {
+                    state.window.request_redraw();
+                }
+            }
         }
     }
 }
@@ -783,10 +974,25 @@ fn main() {
     #[cfg(target_os = "macos")]
     native_menu::suppress_system_edit_menu_items();
 
-    let event_loop = EventLoop::<AppEvent>::with_user_event()
-        .build()
-        .expect("create event loop");
+    // Already running (a second launch — on Windows, or a `cargo run`
+    // alongside another copy): bring that one's window up instead.
+    if illustrator_bridge::show_running_instance() {
+        return;
+    }
+
+    // Menu Bar / System Tray on: start silently as just that icon. On
+    // macOS that also means starting out of the Dock (an "accessory" app)
+    // rather than flashing a Dock icon first.
+    let start_hidden = cfg!(any(target_os = "macos", target_os = "windows"))
+        && settings::Settings::load().menu_bar;
+    let mut builder = EventLoop::<AppEvent>::with_user_event();
+    #[cfg(target_os = "macos")]
+    if start_hidden {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+        builder.with_activation_policy(ActivationPolicy::Accessory);
+    }
+    let event_loop = builder.build().expect("create event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
-    let mut shell = Shell::new(event_loop.create_proxy());
+    let mut shell = Shell::new(event_loop.create_proxy(), start_hidden);
     event_loop.run_app(&mut shell).expect("run event loop");
 }

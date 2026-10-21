@@ -99,6 +99,15 @@ impl Catalog {
             }
         }
 
+        // One-time upgrade: libraries catalogued before PostScript names
+        // and character coverage were stored get re-parsed now, since only the system folders
+        // above are rescanned on a normal launch.
+        if store.needs_postscript_backfill().unwrap_or(false) {
+            for folder in store.list_folders().unwrap_or_default() {
+                let _ = scan_folder(&mut store, &folder, &ignored);
+            }
+        }
+
         let mut watcher = new_debouncer(
             Duration::from_millis(800),
             move |res: notify_debouncer_mini::DebounceEventResult| {
@@ -270,6 +279,72 @@ impl Catalog {
         restored
     }
 
+    /// Reinstalls every activation whose installed file is a symlink or
+    /// has gone missing. Before 0.1.2 macOS activation made symlinks,
+    /// which `fontd` never registers (see `activate::install`), so those
+    /// fonts showed as active without any other app seeing them. Returns
+    /// how many were repaired.
+    pub fn repair_activations(&mut self) -> usize {
+        let Ok(activations) = self.store.activations() else {
+            return 0;
+        };
+        let mut repaired = 0;
+        for (id, installed) in activations {
+            let installed = Path::new(&installed);
+            let healthy = installed
+                .symlink_metadata()
+                .is_ok_and(|meta| meta.file_type().is_file());
+            if healthy {
+                continue;
+            }
+            let Ok(Some((source, _))) = self.store.font_path(id) else {
+                continue;
+            };
+            let _ = activate::uninstall(installed);
+            if let Ok(new_path) = activate::install(Path::new(&source), &format!("glyphclub-{id}")) {
+                if self
+                    .store
+                    .record_activation(id, &new_path.to_string_lossy())
+                    .is_ok()
+                {
+                    repaired += 1;
+                }
+            }
+        }
+        repaired
+    }
+
+    pub fn coverage(&self) -> Result<Vec<(i64, Vec<u8>)>> {
+        self.store.all_coverage()
+    }
+
+    pub fn font_ids_for_postscript_name(&self, name: &str) -> Result<Vec<i64>> {
+        self.store.font_ids_for_postscript_name(name)
+    }
+
+    /// Deactivates whatever the last session activated temporarily but
+    /// never cleaned up (a crash, a force quit, logging out — anything
+    /// that skipped `ui::cleanup_before_quit`), so those don't turn into
+    /// permanent activations. Run at launch, before this session activates
+    /// anything temporarily itself.
+    pub fn drop_leftover_temporary_activations(&mut self) -> usize {
+        let leftovers = activation_memory::load_temporary();
+        let mut dropped = 0;
+        for id in leftovers {
+            let remembered = self
+                .store
+                .font_path(id)
+                .ok()
+                .flatten()
+                .is_some_and(|(path, _)| self.active_memory.contains(&path));
+            if !remembered && self.force_deactivate(id).is_ok() {
+                dropped += 1;
+            }
+        }
+        activation_memory::save_temporary(&HashSet::new());
+        dropped
+    }
+
     pub fn toggle_activation(&mut self, id: i64) -> Result<bool> {
         let currently_active = self.store.active_ids()?.contains(&id);
         let path = self.store.font_path(id)?.map(|(p, _)| p);
@@ -311,6 +386,9 @@ impl Catalog {
         let installed = activate::install(Path::new(&path), &format!("glyphclub-{id}"))?;
         self.store
             .record_activation(id, &installed.to_string_lossy())?;
+        let mut temporary = activation_memory::load_temporary();
+        temporary.insert(id);
+        activation_memory::save_temporary(&temporary);
         Ok(true)
     }
 
@@ -321,6 +399,10 @@ impl Catalog {
     pub fn force_deactivate(&mut self, id: i64) -> Result<()> {
         if let Some(installed) = self.store.clear_activation(id)? {
             let _ = activate::uninstall(Path::new(&installed));
+        }
+        let mut temporary = activation_memory::load_temporary();
+        if temporary.remove(&id) {
+            activation_memory::save_temporary(&temporary);
         }
         Ok(())
     }

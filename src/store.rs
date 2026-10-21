@@ -96,6 +96,29 @@ impl Store {
             );
             ",
         )?;
+        // Added in 0.1.2 for the Illustrator plug-in's auto-activation.
+        // NULL means "not parsed since the column existed" — `known_files`
+        // reports those rows as changed so the next scan fills them in,
+        // while '' is a parsed face that simply has no PostScript name.
+        let has_ps_column = conn
+            .prepare("SELECT 1 FROM pragma_table_info('fonts') WHERE name = 'postscript_name'")?
+            .exists([])?;
+        if !has_ps_column {
+            conn.execute_batch("ALTER TABLE fonts ADD COLUMN postscript_name TEXT;")?;
+        }
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_fonts_postscript ON fonts(postscript_name);",
+        )?;
+        // Added in 0.1.2 for "Hide missing" and the dimmed-preview check:
+        // each face's character coverage (`coverage::encode`). NULL means
+        // not parsed since the column existed — rescanned like
+        // `postscript_name` above; an empty blob is a face with none.
+        let has_coverage_column = conn
+            .prepare("SELECT 1 FROM pragma_table_info('fonts') WHERE name = 'coverage'")?
+            .exists([])?;
+        if !has_coverage_column {
+            conn.execute_batch("ALTER TABLE fonts ADD COLUMN coverage BLOB;")?;
+        }
         Ok(Self { conn })
     }
 
@@ -133,11 +156,17 @@ impl Store {
 
     /// All files already indexed for a folder, as `path -> (mtime, size)`, so a
     /// rescan can diff the filesystem against this in memory instead of hitting
-    /// SQLite once per file.
+    /// SQLite once per file. A row with no `postscript_name` yet reports an
+    /// mtime of -1, so it never matches and gets re-parsed.
     pub fn known_files(&self, folder_id: i64) -> Result<HashMap<String, (i64, i64)>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT DISTINCT path, mtime, size FROM fonts WHERE folder_id = ?1")?;
+            .prepare(
+                "SELECT DISTINCT path,
+                        CASE WHEN postscript_name IS NULL OR coverage IS NULL THEN -1 ELSE mtime END,
+                        size
+                 FROM fonts WHERE folder_id = ?1",
+            )?;
         let rows = stmt
             .query_map([folder_id], |row| {
                 Ok((row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?)))
@@ -148,6 +177,12 @@ impl Store {
 
     /// Replaces every face previously stored for `path` with `records` (a file's
     /// face count can change if it was edited, e.g. a collection gaining a face).
+    ///
+    /// Updates faces that are still there in place rather than deleting and
+    /// re-inserting them: stars, tags and activations reference a face's
+    /// id (and cascade-delete with it), so re-inserting silently dropped
+    /// them every time a file was re-parsed — for every font at once during
+    /// a catalog upgrade's backfill.
     pub fn replace_faces(
         &mut self,
         folder_id: i64,
@@ -155,15 +190,25 @@ impl Store {
         records: &[FontRecord],
     ) -> Result<()> {
         let tx = self.conn.transaction()?;
-        tx.execute("DELETE FROM fonts WHERE path = ?1", [path])?;
         {
-            let mut stmt = tx.prepare(
+            let mut upsert = tx.prepare(
                 "INSERT INTO fonts
-                    (folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    (folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size, postscript_name, coverage)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 ON CONFLICT(path, face_index) DO UPDATE SET
+                    folder_id = excluded.folder_id,
+                    family = excluded.family,
+                    subfamily = excluded.subfamily,
+                    weight = excluded.weight,
+                    italic = excluded.italic,
+                    monospace = excluded.monospace,
+                    mtime = excluded.mtime,
+                    size = excluded.size,
+                    postscript_name = excluded.postscript_name,
+                    coverage = excluded.coverage",
             )?;
             for r in records {
-                stmt.execute(rusqlite::params![
+                upsert.execute(rusqlite::params![
                     folder_id,
                     r.path,
                     r.face_index,
@@ -174,11 +219,48 @@ impl Store {
                     r.monospace as i64,
                     r.mtime,
                     r.size,
+                    r.postscript_name,
+                    crate::coverage::encode(r.coverage.as_deref().unwrap_or(&[])),
                 ])?;
+            }
+        }
+        // Faces the file no longer has.
+        let kept: HashSet<u32> = records.iter().map(|r| r.face_index).collect();
+        let stored: Vec<(i64, u32)> = {
+            let mut stmt = tx.prepare("SELECT id, face_index FROM fonts WHERE path = ?1")?;
+            let rows = stmt
+                .query_map([path], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+        for (id, face_index) in stored {
+            if !kept.contains(&face_index) {
+                tx.execute("DELETE FROM fonts WHERE id = ?1", [id])?;
             }
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Every face's stored coverage blob (see `coverage::encode`) — loaded
+    /// into memory at launch and after each rescan.
+    pub fn all_coverage(&self) -> Result<Vec<(i64, Vec<u8>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, coverage FROM fonts WHERE coverage IS NOT NULL")?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// True while any row predates the `postscript_name` column — see
+    /// `Catalog::open`, which rescans every library once to fill them in.
+    pub fn needs_postscript_backfill(&self) -> Result<bool> {
+        Ok(self
+            .conn
+            .prepare("SELECT 1 FROM fonts WHERE postscript_name IS NULL OR coverage IS NULL LIMIT 1")?
+            .exists([])?)
     }
 
     pub fn delete_path(&self, path: &str) -> Result<()> {
@@ -193,7 +275,7 @@ impl Store {
     /// rows, via `ON DELETE CASCADE`) is removed.
     pub fn fonts_in_folder(&self, folder_id: i64) -> Result<Vec<FontRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size
+            "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size, COALESCE(postscript_name, '')
              FROM fonts
              WHERE folder_id = ?1",
         )?;
@@ -205,7 +287,7 @@ impl Store {
 
     pub fn all_fonts(&self) -> Result<Vec<FontRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size
+            "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size, COALESCE(postscript_name, '')
              FROM fonts
              ORDER BY family COLLATE NOCASE, weight, italic",
         )?;
@@ -218,7 +300,7 @@ impl Store {
     pub fn search_fonts(&self, query: &str) -> Result<Vec<FontRow>> {
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
         let mut stmt = self.conn.prepare(
-            "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size
+            "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size, COALESCE(postscript_name, '')
              FROM fonts
              WHERE family LIKE ?1 ESCAPE '\\'
              ORDER BY family COLLATE NOCASE, weight, italic",
@@ -241,6 +323,20 @@ impl Store {
         Ok(rows)
     }
 
+    /// Every face whose PostScript name is `name`, user libraries before
+    /// system fonts, then by id — the Illustrator plug-in asks by
+    /// PostScript name, since that's all a document records.
+    pub fn font_ids_for_postscript_name(&self, name: &str) -> Result<Vec<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, path FROM fonts WHERE postscript_name = ?1 ORDER BY id")?;
+        let mut rows = stmt
+            .query_map([name], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.sort_by_key(|(_, path)| crate::font::is_system_path(path));
+        Ok(rows.into_iter().map(|(id, _)| id).collect())
+    }
+
     pub fn font_path(&self, id: i64) -> Result<Option<(String, u32)>> {
         let result = self
             .conn
@@ -260,6 +356,16 @@ impl Store {
         let rows = stmt
             .query_map([], |row| row.get(0))?
             .collect::<rusqlite::Result<HashSet<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Every activation as `(font_id, installed_path)` — see
+    /// `Catalog::repair_activations`.
+    pub fn activations(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare("SELECT font_id, installed_path FROM activations")?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
 
@@ -393,6 +499,61 @@ fn row_to_font(row: &rusqlite::Row) -> rusqlite::Result<FontRow> {
             monospace: row.get::<_, i64>(8)? != 0,
             mtime: row.get(9)?,
             size: row.get(10)?,
+            postscript_name: row.get(11)?,
+            coverage: None,
         },
     })
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    use crate::scan::scan_folder;
+
+    #[test]
+    fn finds_system_fonts_by_postscript_name() {
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let mut store = Store::open(db_file.path()).unwrap();
+        let id = store.add_folder("/System/Library/Fonts").unwrap();
+        let folder = Folder { id, path: "/System/Library/Fonts".to_string() };
+        scan_folder(&mut store, &folder, &HashSet::new()).unwrap();
+
+        let ids = store.font_ids_for_postscript_name("Helvetica-Bold").unwrap();
+        assert!(!ids.is_empty(), "Helvetica-Bold should be catalogued by PostScript name");
+        let (path, _) = store.font_path(ids[0]).unwrap().unwrap();
+        assert!(path.ends_with("Helvetica.ttc"), "unexpected file {path}");
+    }
+
+    #[test]
+    fn reparsing_a_file_keeps_its_stars_and_ids() {
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let mut store = Store::open(db_file.path()).unwrap();
+        let id = store.add_folder("/System/Library/Fonts").unwrap();
+        let folder = Folder { id, path: "/System/Library/Fonts".to_string() };
+        scan_folder(&mut store, &folder, &HashSet::new()).unwrap();
+
+        let star = store.font_ids_for_postscript_name("Helvetica-Bold").unwrap()[0];
+        store.set_favorite(star, true).unwrap();
+        // Forces every file to be re-parsed, as a catalog upgrade does.
+        store.conn.execute("UPDATE fonts SET coverage = NULL", []).unwrap();
+        scan_folder(&mut store, &folder, &HashSet::new()).unwrap();
+
+        assert_eq!(store.font_ids_for_postscript_name("Helvetica-Bold").unwrap()[0], star);
+        assert!(store.favorite_ids().unwrap().contains(&star), "the star should survive a re-parse");
+    }
+
+    #[test]
+    fn rows_from_before_the_column_get_reparsed() {
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let mut store = Store::open(db_file.path()).unwrap();
+        let id = store.add_folder("/System/Library/Fonts").unwrap();
+        let folder = Folder { id, path: "/System/Library/Fonts".to_string() };
+        scan_folder(&mut store, &folder, &HashSet::new()).unwrap();
+
+        store.conn.execute("UPDATE fonts SET postscript_name = NULL, coverage = NULL", []).unwrap();
+        let rescan = scan_folder(&mut store, &folder, &HashSet::new()).unwrap();
+        assert!(rescan.parsed_files > 0, "NULL postscript_name rows should be re-parsed");
+        let again = scan_folder(&mut store, &folder, &HashSet::new()).unwrap();
+        assert_eq!(again.parsed_files, 0);
+    }
 }

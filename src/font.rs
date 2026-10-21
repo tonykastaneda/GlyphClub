@@ -7,6 +7,14 @@ pub struct FontRecord {
     pub face_index: u32,
     pub family: String,
     pub subfamily: String,
+    /// The `name` table's PostScript name (ID 6) — how Illustrator and
+    /// other Adobe apps identify a font in a document. Empty if the face
+    /// has none.
+    pub postscript_name: String,
+    /// Every character the face has a real glyph for, as sorted inclusive
+    /// ranges (see `coverage`). Filled in by scanning; `None` when read
+    /// back from the catalog, which keeps it in its own column instead.
+    pub coverage: Option<Vec<(u32, u32)>>,
     pub weight: u16,
     pub italic: bool,
     pub monospace: bool,
@@ -25,12 +33,16 @@ pub fn parse_faces(data: &[u8], path: &Path, mtime: i64, size: i64) -> Vec<FontR
             let face = ttf_parser::Face::parse(data, index).ok()?;
             let family = best_name(&face, 16, 1).unwrap_or_else(|| "Unknown".to_string());
             let subfamily = best_name(&face, 17, 2).unwrap_or_else(|| "Regular".to_string());
+            let postscript_name = postscript_name(&face).unwrap_or_default();
+            let coverage = crate::coverage::to_ranges(crate::font_info::real_codepoints(&face));
 
             Some(FontRecord {
                 path: path_str.clone(),
                 face_index: index,
                 family,
                 subfamily,
+                postscript_name,
+                coverage: Some(coverage),
                 weight: face.weight().to_number(),
                 italic: matches!(
                     face.style(),
@@ -65,6 +77,27 @@ fn best_name(face: &ttf_parser::Face, preferred_id: u16, fallback_id: u16) -> Op
     }
 
     fallback
+}
+
+/// Name ID 6. PostScript names are printable ASCII by spec, so a
+/// Macintosh-platform entry (which `ttf_parser` won't decode) is read as
+/// raw bytes rather than skipped — some older fonts only have that one.
+fn postscript_name(face: &ttf_parser::Face) -> Option<String> {
+    let mut mac = None;
+    for name in face.names() {
+        if name.name_id != ttf_parser::name_id::POST_SCRIPT_NAME {
+            continue;
+        }
+        if let Some(text) = name.to_string() {
+            let text = text.trim().to_string();
+            if !text.is_empty() {
+                return Some(text);
+            }
+        } else if mac.is_none() && name.name.is_ascii() {
+            mac = Some(String::from_utf8_lossy(name.name).trim().to_string());
+        }
+    }
+    mac.filter(|n| !n.is_empty())
 }
 
 /// A human label for the list view's Format column, derived from the file

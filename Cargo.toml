@@ -49,12 +49,15 @@ notify-debouncer-mini = "0.7.0"
 filetime = "0.2.29"
 # Local-time formatting for the list view's Date Added column.
 chrono = "0.4"
+# Decodes the branding PNGs into RGBA — winit's window icon on Windows and
+# the menu bar / system tray icon (see `tray.rs`). png-only.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
-# Decodes the branding PNG into RGBA for winit's `Icon::from_rgba` (taskbar
-# / title-bar icon) — png-only, no need for the rest of `image`'s formats.
-image = { version = "0.25", default-features = false, features = ["png"] }
+# The system tray icon (see `tray.rs`). 0.24 because it's the release
+# built on muda 0.19 — the same MenuEvent channel as the macOS menu bar.
+tray-icon = { version = "0.24", default-features = false }
 
 # Direct NSWindow access to reposition the traffic-light buttons ourselves,
 # since macOS otherwise places them at its own fixed inset regardless of
@@ -62,8 +65,10 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # branding PNG.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSButton", "NSView", "NSApplication", "NSImage"] }
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSButton", "NSView", "NSApplication", "NSImage", "NSRunningApplication", "NSResponder"] }
 objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSData", "NSUserDefaults", "NSString"] }
+# The menu bar icon (see `tray.rs`) — same crate as Windows' system tray.
+tray-icon = { version = "0.24", default-features = false }
 # The native macOS menu bar (see `native_menu.rs`) — same crate/version
 # Amalith uses for its own menu bar, kept off Windows for now since that
 # platform has its own separate menu plan.

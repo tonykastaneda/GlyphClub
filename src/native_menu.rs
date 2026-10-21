@@ -42,6 +42,8 @@ pub enum MenuAction {
     ExportUserFonts,
     FindFocus,
     SetView(ViewMode),
+    SortBy(crate::app::SortField),
+    ToggleHideMissing,
     ToggleInfo,
     ZoomIn,
     ZoomOut,
@@ -65,12 +67,15 @@ pub enum MenuAction {
 pub struct NativeMenu {
     items: Vec<(muda::MenuId, MenuAction)>,
     view_checks: (CheckMenuItem, CheckMenuItem),
+    /// View ▸ Sort By's items, ticked by `sync_view`.
+    sort_checks: Vec<(crate::app::SortField, CheckMenuItem)>,
+    hide_missing_check: CheckMenuItem,
     // Kept alive for the process — dropping it tears the menu bar down.
     _menu: Menu,
 }
 
 impl NativeMenu {
-    pub fn build(view_mode: ViewMode) -> Self {
+    pub fn build(view_mode: ViewMode, sort: crate::app::SortField) -> Self {
         let sup = Some(Modifiers::SUPER);
         let sup_shift = Some(Modifiers::SUPER | Modifiers::SHIFT);
         let mk = |label: &str, mods, code| MenuItem::new(label, true, Some(Accelerator::new(mods, code)));
@@ -171,12 +176,30 @@ impl NativeMenu {
         let info_i = reg(&mut items, mk("Show Font Info", sup, Code::KeyI), MenuAction::ToggleInfo);
         let zoom_in_i = reg(&mut items, mk("Zoom In", sup, Code::Equal), MenuAction::ZoomIn);
         let zoom_out_i = reg(&mut items, mk("Zoom Out", sup, Code::Minus), MenuAction::ZoomOut);
+        let sort_checks: Vec<(crate::app::SortField, CheckMenuItem)> = crate::app::SortField::MENU
+            .iter()
+            .map(|&(field, label)| {
+                let item = reg(&mut items, CheckMenuItem::new(label, true, field == sort, None), MenuAction::SortBy(field));
+                (field, item)
+            })
+            .collect();
+        let sort_item_refs: Vec<&dyn muda::IsMenuItem> =
+            sort_checks.iter().map(|(_, item)| item as &dyn muda::IsMenuItem).collect();
+        let sort_menu = Submenu::with_items("Sort By", true, &sort_item_refs).expect("sort menu");
+        let hide_missing_i = reg(
+            &mut items,
+            CheckMenuItem::new("Hide Fonts Missing Characters", true, false, None),
+            MenuAction::ToggleHideMissing,
+        );
         let view_menu = Submenu::with_items(
             "View",
             true,
             &[
                 &grid_i,
                 &list_i,
+                &PredefinedMenuItem::separator(),
+                &sort_menu,
+                &hide_missing_i,
                 &PredefinedMenuItem::separator(),
                 &info_i,
                 &PredefinedMenuItem::separator(),
@@ -262,24 +285,36 @@ impl NativeMenu {
         Self {
             items,
             view_checks: (grid_i, list_i),
+            sort_checks,
+            hide_missing_check: hide_missing_i,
             _menu: menu,
         }
     }
 
-    /// Ticks whichever of View ▸ as Grid / as List matches the live mode.
-    pub fn sync_view(&self, view_mode: ViewMode) {
+    /// Ticks whichever of View ▸ as Grid / as List matches the live mode,
+    /// and the Sort By item for the live sort (none, when a list header
+    /// picked a field the menu doesn't offer).
+    pub fn sync_view(&self, view_mode: ViewMode, sort: crate::app::SortField, hide_missing: bool) {
+        self.hide_missing_check.set_checked(hide_missing);
         self.view_checks.0.set_checked(matches!(view_mode, ViewMode::Grid));
         self.view_checks.1.set_checked(matches!(view_mode, ViewMode::List));
+        for (field, item) in &self.sort_checks {
+            item.set_checked(*field == sort);
+        }
     }
 
     /// Every menu click queued since the last call.
-    pub fn drain(&self) -> Vec<MenuAction> {
-        let mut out = Vec::new();
-        while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
-            if let Some((_, action)) = self.items.iter().find(|(id, _)| *id == event.id) {
-                out.push(*action);
-            }
-        }
-        out
+    /// This menu's actions among `events` — `main.rs` drains muda's
+    /// channel once and shares it with the menu bar / tray icon's menu.
+    pub fn actions_for(&self, events: &[muda::MenuEvent]) -> Vec<MenuAction> {
+        events
+            .iter()
+            .filter_map(|event| {
+                self.items
+                    .iter()
+                    .find(|(id, _)| *id == event.id)
+                    .map(|(_, action)| *action)
+            })
+            .collect()
     }
 }

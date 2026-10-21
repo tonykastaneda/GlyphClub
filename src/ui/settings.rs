@@ -12,14 +12,14 @@ use vello::Scene;
 
 use super::sidebar::draw_nav_icon;
 use super::{fill_rect, stroke_rect, HitAction, HitRegion};
-use crate::app::{App, Filter};
+use crate::app::{App, Filter, SettingsTab};
 use crate::settings::{Appearance, SettingToggle};
 use crate::text::TextCx;
 use crate::theme;
 
 pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: f64, height: f64) {
     let panel_w = 460.0_f64.min(width - 40.0);
-    let panel_h = 520.0_f64.min(height - 40.0);
+    let panel_h = 564.0_f64.min(height - 40.0);
     let x0 = (width - panel_w) / 2.0;
     let y0 = (height - panel_h) / 2.0;
     let panel = Rect::new(x0, y0, x0 + panel_w, y0 + panel_h);
@@ -69,7 +69,56 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: f64, hei
 
     let content_x = panel.x0 + 24.0;
     let content_w = panel_w - 48.0;
-    let mut y = panel.y0 + 78.0;
+    let tabs_bottom = draw_tabs(app, text, scene, panel.x0, panel.x1, panel.y0 + 70.0);
+    let y = tabs_bottom + 22.0;
+
+    match app.settings_tab {
+        SettingsTab::General => draw_general(app, text, scene, content_x, y, content_w),
+        SettingsTab::Integrations => draw_integrations(app, text, scene, content_x, y, content_w),
+    }
+}
+
+/// General | Integrations, styled like the detail panel's tab bar
+/// (`ui::detail::draw_tab_bar`). Returns the y just below it.
+fn draw_tabs(app: &mut App, text: &mut TextCx, scene: &mut Scene, x0: f64, x1: f64, y0: f64) -> f64 {
+    let tabs = [(SettingsTab::General, "General"), (SettingsTab::Integrations, "Integrations")];
+    let h = 28.0;
+    let pad_x = 14.0;
+    let widths: Vec<f64> = tabs.iter().map(|(_, label)| text.measure(label, 12.0, None) + pad_x * 2.0).collect();
+    let total_w: f64 = widths.iter().sum();
+    let start_x = x0 + ((x1 - x0) - total_w) / 2.0;
+
+    let track = Rect::new(start_x, y0, start_x + total_w, y0 + h);
+    fill_rect(scene, track, theme::CONTROL_BG(), h / 2.0);
+    stroke_rect(scene, track, theme::CONTROL_BORDER(), h / 2.0, 1.0);
+
+    let mut cx = start_x;
+    for (i, (tab, label)) in tabs.into_iter().enumerate() {
+        let w = widths[i];
+        let rect = Rect::new(cx, y0, cx + w, y0 + h);
+        let active = app.settings_tab == tab;
+        if active {
+            fill_rect(scene, rect.inset(-2.0), theme::BRAND_ACCENT(), (h - 4.0) / 2.0);
+        }
+        let tw = text.measure(label, 12.0, None);
+        text.draw_centered_v(
+            scene,
+            label,
+            12.0,
+            None,
+            if active { theme::CANVAS() } else { theme::TEXT_SECONDARY() },
+            rect.x0 + (rect.width() - tw) / 2.0,
+            rect.y0,
+            rect.y1,
+        );
+        app.hit_regions.push(HitRegion { rect, action: HitAction::SetSettingsTab(tab) });
+        cx += w;
+    }
+    y0 + h
+}
+
+fn draw_general(app: &mut App, text: &mut TextCx, scene: &mut Scene, content_x: f64, y: f64, content_w: f64) {
+    let mut y = y;
 
     let (next_y, appearance_trigger) = draw_appearance_row(app, text, scene, content_x, y, content_w);
     y = next_y;
@@ -85,11 +134,16 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: f64, hei
         content_x,
         y,
         content_w,
-        "Launch GlyphClub on startup",
+        "Start on Login",
         None,
         app.settings.launch_on_startup,
         SettingToggle::LaunchOnStartup,
     );
+    let menu_bar_description = if cfg!(target_os = "windows") {
+        "Start silently in the system tray; closing the window keeps it there."
+    } else {
+        "Start silently in the menu bar; closing the window keeps it there."
+    };
     y = draw_toggle_row(
         app,
         text,
@@ -97,10 +151,10 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: f64, hei
         content_x,
         y,
         content_w,
-        "Run GlyphClub in background",
-        Some("Keep GlyphClub available when the window is closed."),
-        app.settings.run_in_background,
-        SettingToggle::RunInBackground,
+        crate::tray::SETTING_LABEL,
+        Some(menu_bar_description),
+        app.settings.menu_bar,
+        SettingToggle::MenuBar,
     );
     y = draw_toggle_row(
         app,
@@ -132,14 +186,167 @@ pub fn draw(app: &mut App, text: &mut TextCx, scene: &mut Scene, width: f64, hei
     }
 }
 
+fn draw_integrations(app: &mut App, text: &mut TextCx, scene: &mut Scene, x: f64, y: f64, w: f64) {
+    let mut y = draw_section_label(text, scene, x, y, "ADOBE ILLUSTRATOR");
+    text.draw(scene, "Auto-activate missing fonts", 13.0, None, theme::TEXT(), x, y);
+    y += 20.0;
+    for line in [
+        "When a document opens with fonts that aren't installed, the plug-in",
+        "asks GlyphClub for them, starting it in the background if needed.",
+        "They stay active until you quit GlyphClub.",
+    ] {
+        text.draw(scene, line, 11.0, None, theme::TEXT_TERTIARY(), x, y);
+        y += 16.0;
+    }
+    y += 14.0;
+
+    if !cfg!(target_os = "macos") {
+        text.draw(scene, "The Illustrator plug-in is macOS-only for now.", 12.0, None, theme::TEXT_SECONDARY(), x, y);
+        return;
+    }
+    let bundled = app.integrations.bundled_version.clone();
+    if bundled.is_none() {
+        text.draw(scene, "This build of GlyphClub doesn't include the plug-in.", 12.0, None, theme::TEXT_SECONDARY(), x, y);
+        return;
+    }
+    if app.integrations.illustrators.is_empty() {
+        text.draw(scene, "No Adobe Illustrator found in /Applications.", 12.0, None, theme::TEXT_SECONDARY(), x, y);
+        return;
+    }
+
+    let busy = app.integrations.busy;
+    for (i, install) in app.integrations.illustrators.clone().into_iter().enumerate() {
+        let row = Rect::new(x, y, x + w, y + 52.0);
+        fill_rect(scene, row, theme::CONTROL_BG(), 10.0);
+        stroke_rect(scene, row, theme::CONTROL_BORDER(), 10.0, 1.0);
+        text.draw(scene, &install.label, 13.0, None, theme::TEXT(), row.x0 + 14.0, row.y0 + 10.0);
+
+        let bundled = bundled.as_deref().unwrap_or("");
+        let outdated = install
+            .installed_version
+            .as_deref()
+            .is_some_and(|v| v.is_empty() || crate::app::is_newer_version(bundled, v));
+        let (status, action) = if !install.supported() {
+            (format!("Needs Illustrator {} or later", crate::integrations::MIN_ILLUSTRATOR_YEAR), None)
+        } else {
+            match install.installed_version.as_deref() {
+                None => ("Not installed".to_string(), Some(("Install", HitAction::InstallIllustratorPlugin(i)))),
+                Some(v) if outdated => (
+                    format!("Version {} installed, {bundled} available", if v.is_empty() { "?" } else { v }),
+                    Some(("Update", HitAction::InstallIllustratorPlugin(i))),
+                ),
+                Some(v) => (format!("Installed ({v})"), Some(("Uninstall", HitAction::UninstallIllustratorPlugin(i)))),
+            }
+        };
+        text.draw(scene, &status, 11.0, None, theme::TEXT_TERTIARY(), row.x0 + 14.0, row.y0 + 29.0);
+
+        if let Some((label, action)) = action {
+            let primary = !matches!(action, HitAction::UninstallIllustratorPlugin(_));
+            let tw = text.measure(label, 12.0, None);
+            let bw = tw + 28.0;
+            let btn = Rect::new(row.x1 - 12.0 - bw, row.y0 + 12.0, row.x1 - 12.0, row.y1 - 12.0);
+            let hovered = !busy && btn.contains(app.hover);
+            let (fill, label_color) = if primary {
+                let accent = theme::BRAND_ACCENT();
+                (if busy { accent.with_alpha(0.4) } else if hovered { accent.with_alpha(0.85) } else { accent }, theme::CANVAS())
+            } else {
+                (if hovered { theme::CONTROL_BG_HOVER() } else { theme::SIDEBAR_BG() }, theme::TEXT_SECONDARY())
+            };
+            fill_rect(scene, btn, fill, btn.height() / 2.0);
+            if !primary {
+                stroke_rect(scene, btn, theme::CONTROL_BORDER(), btn.height() / 2.0, 1.0);
+            }
+            text.draw_centered_v(scene, label, 12.0, None, label_color, btn.x0 + (bw - tw) / 2.0, btn.y0, btn.y1);
+            if !busy {
+                app.hit_regions.push(HitRegion { rect: btn, action });
+            }
+        }
+        y = row.y1 + 8.0;
+    }
+
+    y += 6.0;
+    let note = if busy {
+        Some(("Working\u{2026}".to_string(), false))
+    } else if let Some(message) = app.integrations.message.clone() {
+        Some(message)
+    } else if app.integrations.illustrator_running {
+        Some(("Illustrator is open: restart it after installing to load the plug-in.".to_string(), false))
+    } else {
+        None
+    };
+    if let Some((note, error)) = note {
+        text.draw(
+            scene,
+            &note,
+            11.0,
+            None,
+            if error { theme::DANGER() } else { theme::TEXT_SECONDARY() },
+            x,
+            y,
+        );
+    }
+}
+
+/// Settings ▸ Integrations ▸ Install/Update. Runs on a background thread
+/// because it can sit on the macOS administrator prompt; the outcome comes
+/// back as `AppEvent::IntegrationFinished`.
+pub fn install_illustrator_plugin(app: &mut App, index: usize) {
+    let Some(install) = app.integrations.illustrators.get(index).cloned() else {
+        return;
+    };
+    let Some(source) = crate::integrations::bundled_plugin() else {
+        return;
+    };
+    // Whatever Illustrator has loaded keeps reporting the old version until
+    // it restarts; don't let that keep the update banner up.
+    app.integrations.connected_plugin_version = None;
+    start_integration_job(app, move || {
+        crate::integrations::install(&source, &install.plugins_dir)?;
+        Ok(if crate::integrations::illustrator_running() {
+            format!("Installed in {}. Restart Illustrator to load it.", install.label)
+        } else {
+            format!("Installed in {}. Open Window > Glyph Club there to see it.", install.label)
+        })
+    });
+}
+
+pub fn uninstall_illustrator_plugin(app: &mut App, index: usize) {
+    let Some(install) = app.integrations.illustrators.get(index).cloned() else {
+        return;
+    };
+    start_integration_job(app, move || {
+        crate::integrations::uninstall(&install.plugins_dir)?;
+        Ok(format!("Removed from {}.", install.label))
+    });
+}
+
+fn start_integration_job(app: &mut App, job: impl FnOnce() -> Result<String, String> + Send + 'static) {
+    if app.integrations.busy {
+        return;
+    }
+    app.integrations.busy = true;
+    app.integrations.message = None;
+    let proxy = app.update_proxy.clone();
+    std::thread::spawn(move || {
+        let _ = proxy.send_event(crate::AppEvent::IntegrationFinished(job()));
+    });
+}
+
 /// Applies one settings-panel row's click: flips the one field it owns and
 /// persists immediately, so a preference survives even if the app is
 /// force-quit rather than closed normally.
 pub fn apply_toggle(app: &mut App, which: SettingToggle) {
     let s = &mut app.settings;
     match which {
-        SettingToggle::LaunchOnStartup => s.launch_on_startup = !s.launch_on_startup,
-        SettingToggle::RunInBackground => s.run_in_background = !s.run_in_background,
+        SettingToggle::LaunchOnStartup => {
+            let on = !s.launch_on_startup;
+            match crate::login_item::set_enabled(on) {
+                Ok(()) => s.launch_on_startup = on,
+                Err(e) => app.status = format!("Couldn't change Start on Login: {e}"),
+            }
+        }
+        // `main.rs` notices the change and adds or removes the icon.
+        SettingToggle::MenuBar => s.menu_bar = !s.menu_bar,
         SettingToggle::GlobalShortcutEnabled => s.global_shortcut_enabled = !s.global_shortcut_enabled,
         SettingToggle::SidebarAllFonts => s.sidebar_show_all = !s.sidebar_show_all,
         SettingToggle::SidebarSystemFonts => s.sidebar_show_system = !s.sidebar_show_system,

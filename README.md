@@ -34,6 +34,39 @@ reads plain folders, built from scratch on `winit` + `wgpu` + `vello` +
 - **A real native menu bar on macOS** (via `muda`), and a matching
   hand-rolled one on Windows.
 
+## Illustrator plug-in (macOS)
+
+`plugin/` is a native Illustrator 2026 plug-in that auto-activates a
+document's missing fonts. When a document opens, it asks Illustrator which
+fonts are stand-ins for missing ones and sends their PostScript names to
+GlyphClub over a loopback connection (`src/illustrator_bridge.rs`: a random
+port and a per-launch token in `~/Library/Application Support/glyphclub/bridge.json`,
+readable only by you). GlyphClub temporarily activates whatever its libraries
+have, starting in the background first if it isn't running. Illustrator then
+picks the fonts up itself, even while its Missing Fonts dialog is open.
+**Window ▸ Glyph Club** shows the connection, an auto-activate switch and
+recent activity.
+
+Install it from **Settings ▸ Integrations**, which copies it into each
+Illustrator 2026 in `/Applications` (using the macOS administrator prompt,
+since the Plug-ins folder is owned by root). To build it yourself you need
+only the Command Line Tools and Adobe's Illustrator SDK at
+`~/Developer/AdobeIllustratorSDK` (or `SDK=...`); no Xcode:
+
+```sh
+make -C plugin          # plugin/build/GlyphClub.aip, arm64, signed ad hoc
+```
+
+A `cargo run` build offers that copy in Integrations.
+
+The plug-in has its own version in `plugin/VERSION`, separate from the
+app's. Bump it whenever the plug-in changes, and only then. When an installed
+(or connected) plug-in is older than the one GlyphClub ships, GlyphClub shows
+an update banner that opens Integrations, and the plug-in's panel says the
+same with an **Open Glyph Club** button. Release builds bundle
+it into GlyphClub.app when the SDK is available (see `scripts/package-macos.sh`
+and the optional `ILLUSTRATOR_SDK_TOKEN` secret in the release workflow).
+
 ## Building and running
 
 ```sh
@@ -83,7 +116,9 @@ that profile name, which the script uses by default.
   the immediate-mode rendering + hit-testing for every screen, `catalog.rs`/
   `scan.rs`/`store.rs` own the SQLite-backed font catalog and folder
   watching, and `activate.rs` does the actual OS-level font
-  activation/deactivation.
+  activation/deactivation. `illustrator_bridge.rs` and `integrations.rs`
+  are the app's side of the Illustrator plug-in.
+- `plugin/` — the Illustrator plug-in (C++/Objective-C++, built with `make`).
 - `branding/` — the source SVGs/icon assets this README and the app's own
   UI (format badges, dock icon, wordmark) are drawn from.
 - `docs/` — the project's marketing site.

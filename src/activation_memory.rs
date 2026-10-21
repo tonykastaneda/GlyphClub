@@ -36,3 +36,26 @@ pub fn save(paths: &HashSet<String>) {
         let _ = std::fs::write(memory_path(), bytes);
     }
 }
+
+/// Font ids activated only temporarily (Font ▸ Activate Temporarily, or
+/// the Illustrator plug-in), recorded as they happen so the next launch
+/// can deactivate exactly these if this session ends without cleaning up
+/// after itself — see `Catalog::drop_leftover_temporary_activations`.
+fn temporary_path() -> PathBuf {
+    memory_path().with_file_name("temporary_activations.json")
+}
+
+pub fn load_temporary() -> HashSet<i64> {
+    std::fs::read(temporary_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_temporary(ids: &HashSet<i64>) {
+    if ids.is_empty() {
+        let _ = std::fs::remove_file(temporary_path());
+    } else if let Ok(bytes) = serde_json::to_vec(ids) {
+        let _ = std::fs::write(temporary_path(), bytes);
+    }
+}

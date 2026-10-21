@@ -40,6 +40,23 @@ cp "$BUILD_DIR/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 cp branding/macos/GlyphClub.icns "$APP_BUNDLE/Contents/Resources/GlyphClub.icns"
 sed "s/__VERSION__/$VERSION/g" packaging/macos/Info.plist > "$APP_BUNDLE/Contents/Info.plist"
 
+# The Illustrator plug-in (plugin/, installed from Settings > Integrations)
+# needs Adobe's Illustrator SDK, which can't live in this public repo — set
+# SDK to wherever it is (default ~/Developer/AdobeIllustratorSDK; CI
+# downloads it, see release.yml). Without it the app still builds, just
+# without the plug-in, and Integrations says so. It's signed on its own
+# first (hardened runtime, like the app) since codesign --deep doesn't
+# reach into Contents/Resources.
+SDK="${SDK:-$HOME/Developer/AdobeIllustratorSDK}"
+if [ -d "$SDK/illustratorapi" ]; then
+  echo "==> Building the Illustrator plug-in"
+  make -C plugin clean
+  make -C plugin SDK="$SDK" SIGN_ID="$SIGN_IDENTITY"
+  ditto plugin/build/GlyphClub.aip "$APP_BUNDLE/Contents/Resources/GlyphClub.aip"
+else
+  echo "==> WARNING: no Illustrator SDK at $SDK, packaging without the Illustrator plug-in"
+fi
+
 echo "==> Code signing with: $SIGN_IDENTITY"
 codesign --force --deep --options runtime --timestamp \
   --entitlements packaging/macos/entitlements.plist \

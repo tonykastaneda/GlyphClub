@@ -21,14 +21,14 @@ fn settings_path() -> PathBuf {
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// UI-present and persisted, but not yet wired to a real macOS login
-    /// item / Windows startup registration — see `ui::settings`'s panel
-    /// copy, which says so rather than implying it already works.
+    /// Settings ▸ Start on Login — see `login_item`.
     pub launch_on_startup: bool,
-    /// Same caveat as `launch_on_startup`: persisted, but closing the
-    /// window still quits rather than backgrounding behind a menu-bar
-    /// icon — that's real additional platform work, not yet done.
-    pub run_in_background: bool,
+    /// Settings ▸ Menu Bar (macOS) / System Tray (Windows) — see `tray`.
+    /// On: GlyphClub starts silently as just that icon, and closing its
+    /// window hides it there. Off: it opens normally and closing quits.
+    /// (Replaces 0.1.x's never-wired "Run in background" checkbox, whose
+    /// saved value is deliberately not carried over.)
+    pub menu_bar: bool,
     /// Same caveat again: no global hotkey is actually registered with the
     /// OS yet, just the toggle + a name recorded for later.
     pub global_shortcut_enabled: bool,
@@ -37,19 +37,24 @@ pub struct Settings {
     pub sidebar_show_starred: bool,
     pub sidebar_show_recent: bool,
     pub appearance: Appearance,
+    /// View ▸ Sort By (or a list header click) — see `app::ListSort`.
+    pub sort_field: crate::app::SortField,
+    pub sort_ascending: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             launch_on_startup: false,
-            run_in_background: false,
+            menu_bar: false,
             global_shortcut_enabled: false,
             sidebar_show_all: true,
             sidebar_show_system: true,
             sidebar_show_starred: true,
             sidebar_show_recent: true,
             appearance: Appearance::SystemDefault,
+            sort_field: crate::app::SortField::Name,
+            sort_ascending: true,
         }
     }
 }
@@ -110,7 +115,7 @@ impl Settings {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SettingToggle {
     LaunchOnStartup,
-    RunInBackground,
+    MenuBar,
     GlobalShortcutEnabled,
     SidebarAllFonts,
     SidebarSystemFonts,

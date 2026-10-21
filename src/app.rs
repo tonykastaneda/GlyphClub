@@ -92,9 +92,59 @@ pub fn default_list_columns() -> Vec<ListColumnSpec> {
     .collect()
 }
 
+/// What the grid and list are sorted by — View ▸ Sort By picks the first
+/// five; the list's column headers can also pick the rest.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub enum SortField {
+    Enabled,
+    Name,
+    Tags,
+    DateAdded,
+    Starred,
+    Styles,
+    Format,
+    Category,
+}
+
+impl SortField {
+    /// View ▸ Sort By, in menu order.
+    pub const MENU: [(SortField, &'static str); 5] = [
+        (SortField::Enabled, "Enabled"),
+        (SortField::Name, "Name"),
+        (SortField::Tags, "Tags"),
+        (SortField::DateAdded, "Date Added"),
+        (SortField::Starred, "Starred"),
+    ];
+
+    /// The direction a fresh pick of this field starts in: the one people
+    /// mean by "sort by" it — active, starred, newest and most-styles
+    /// first; A–Z otherwise (for Tags, tagged fonts first, by tag name).
+    pub fn default_ascending(self) -> bool {
+        !matches!(
+            self,
+            SortField::Enabled | SortField::DateAdded | SortField::Starred | SortField::Styles
+        )
+    }
+}
+
+impl ListColumnKind {
+    /// The field clicking this column's header sorts by.
+    pub fn sort_field(self) -> SortField {
+        match self {
+            ListColumnKind::Name | ListColumnKind::Preview => SortField::Name,
+            ListColumnKind::Styles => SortField::Styles,
+            ListColumnKind::Favorite => SortField::Starred,
+            ListColumnKind::Format => SortField::Format,
+            ListColumnKind::Category => SortField::Category,
+            ListColumnKind::DateAdded => SortField::DateAdded,
+        }
+    }
+}
+
+/// The one sort both views share (persisted in `Settings`).
 #[derive(Clone, Copy, PartialEq)]
 pub struct ListSort {
-    pub column: ListColumnKind,
+    pub column: SortField,
     pub ascending: bool,
 }
 
@@ -110,6 +160,10 @@ pub struct FamilyGroup {
     pub format: &'static str,
     pub newest_mtime: i64,
     pub any_favorite: bool,
+    /// Any member active — the Enabled sort's key.
+    pub any_active: bool,
+    /// The alphabetically first tag name among members — the Tags sort's.
+    pub first_tag: Option<String>,
     /// Precomputed once per group at build time — every sort compares
     /// this rather than lowercasing `family` again on every comparison
     /// the sort makes (`O(n log n)` allocations otherwise, for nothing).
@@ -127,6 +181,10 @@ pub struct ListGroupsCacheKey {
     pub filter: Filter,
     pub search: String,
     pub sort: ListSort,
+    /// See `App::sort_signature`.
+    pub sort_signature: u64,
+    /// See `App::coverage_signature`.
+    pub coverage_signature: u64,
 }
 
 /// What `App::visible_ids_cache` was built from — same idea as
@@ -142,6 +200,9 @@ pub struct VisibleIdsCacheKey {
     pub favorites_version: u64,
     pub filter: Filter,
     pub search: String,
+    pub sort: ListSort,
+    pub sort_signature: u64,
+    pub coverage_signature: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -221,6 +282,58 @@ pub enum DetailTab {
     Info,
 }
 
+/// The Settings overlay's tabs — see `ui::settings::draw`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SettingsTab {
+    General,
+    Integrations,
+}
+
+/// What Settings ▸ Integrations shows — see `crate::integrations`.
+/// Re-read from disk whenever the tab is opened or an install finishes,
+/// rather than every frame (it touches /Applications and runs `pgrep`).
+#[derive(Default)]
+pub struct IntegrationsState {
+    pub illustrators: Vec<crate::integrations::IllustratorInstall>,
+    pub bundled_version: Option<String>,
+    pub illustrator_running: bool,
+    /// An install/uninstall is running (the admin prompt may be up).
+    pub busy: bool,
+    /// The last install/uninstall's outcome — `(message, is_error)`.
+    pub message: Option<(String, bool)>,
+    /// The version a running plug-in reported over the bridge — catches an
+    /// out-of-date copy even in an Illustrator outside /Applications.
+    /// Cleared by a successful install, since Illustrator keeps the old
+    /// one loaded (and reporting) until it restarts.
+    pub connected_plugin_version: Option<String>,
+    /// The "plug-in update" banner's close button, for this session.
+    pub banner_dismissed: bool,
+}
+
+impl IntegrationsState {
+    pub fn refresh(&mut self) {
+        self.illustrators = crate::integrations::find_illustrators();
+        self.bundled_version = crate::integrations::bundled_plugin()
+            .map(|p| crate::integrations::plugin_version(&p).unwrap_or_default());
+        self.illustrator_running = crate::integrations::illustrator_running();
+    }
+
+    /// The version to update to, when an installed or connected plug-in is
+    /// older than the one this build ships.
+    pub fn update_available(&self) -> Option<String> {
+        let bundled = self.bundled_version.clone().filter(|v| !v.is_empty())?;
+        let behind = |v: &str| v.is_empty() || crate::app::is_newer_version(&bundled, v);
+        let installed_behind = self
+            .illustrators
+            .iter()
+            .filter(|i| i.supported())
+            .filter_map(|i| i.installed_version.as_deref())
+            .any(behind);
+        let connected_behind = self.connected_plugin_version.as_deref().is_some_and(behind);
+        (installed_behind || connected_behind).then_some(bundled)
+    }
+}
+
 pub struct FolderEntry {
     pub id: i64,
     pub path: String,
@@ -257,22 +370,40 @@ impl From<FontRow> for FontEntry {
     }
 }
 
-/// Font-id -> registered family name, so a scrolled-past tile's preview
-/// doesn't get re-read off disk and re-shaped every time it scrolls back
-/// into view. `None` means a load was already tried and failed (parse
-/// error, missing file) — don't retry every frame.
+/// Font-id -> its preview's registered family name, so a scrolled-past
+/// tile's preview doesn't get re-read off disk and re-shaped every time it
+/// scrolls back into view. A `None` family means a load was already tried
+/// and failed (parse error, missing file) — don't retry every frame.
 ///
-/// Unlike the old web UI's `fontCache`, this never evicts: unregistering a
-/// font from fontique mid-session is more complexity than a font manager's
-/// catalog (thousands of faces, but only ever a screenful loaded at once)
-/// currently needs. Revisit if memory turns out to matter in practice.
-pub type PreviewCache = HashMap<i64, Option<String>>;
+/// Bounded: each entry pins a whole font file inside fontique, so past
+/// `PREVIEW_CACHE_CAP` registered fonts the least recently drawn are
+/// unregistered (see `App::evict_previews`) and simply re-read if they
+/// scroll back into view. Scrolling a whole large library used to keep
+/// every file it passed in memory.
+pub type PreviewCache = HashMap<i64, PreviewEntry>;
+
+pub struct PreviewEntry {
+    pub family: Option<String>,
+    faces: Vec<crate::text::RegisteredFace>,
+    /// `App::frame` when this preview was last drawn.
+    last_used: u64,
+}
+
+/// Registered previews kept before evicting (down to `PREVIEW_CACHE_KEEP`).
+/// A screenful is at most a few hundred tiles, so this never evicts
+/// anything visible.
+const PREVIEW_CACHE_CAP: usize = 256;
+const PREVIEW_CACHE_KEEP: usize = 192;
+
+/// A tile that's still on screen collects its bytes within a frame of them
+/// arriving; anything older belongs to a tile that scrolled away.
+const UNCLAIMED_BYTES_TTL: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// The result of asking `FontBytesPrefetcher` for a font file's bytes or
 /// glyph coverage: a hot per-tile call site (`App::preview_family`/
 /// `App::glyph_set`) needs to tell "still loading, ask again in a later
 /// frame" apart from "loading genuinely failed" — the former must NOT get
-/// written into `preview_cache`/`glyph_sets`, or the real data arriving a
+/// written into `preview_cache`, or the real data arriving a
 /// few frames later would never be picked up (those caches are otherwise
 /// permanent).
 enum Prefetch<T> {
@@ -334,10 +465,45 @@ fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
 /// `false` on anything unparsable, not just "not newer" — an unrecognized
 /// version format (a stray non-numeric tag, say) should never show an
 /// update banner for something that might not even be a real newer build.
-fn is_newer_version(candidate: &str, current: &str) -> bool {
+pub(crate) fn is_newer_version(candidate: &str, current: &str) -> bool {
     match (parse_version(candidate), parse_version(current)) {
         (Some(c), Some(cur)) => c > cur,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod plugin_update_tests {
+    use super::IntegrationsState;
+    use crate::integrations::IllustratorInstall;
+
+    fn state(installed: Option<&str>, connected: Option<&str>) -> IntegrationsState {
+        IntegrationsState {
+            illustrators: vec![IllustratorInstall {
+                label: "Illustrator 2026".into(),
+                year: Some(2026),
+                plugins_dir: "/tmp".into(),
+                installed_version: installed.map(str::to_string),
+            }],
+            bundled_version: Some("0.2.0".into()),
+            connected_plugin_version: connected.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_older_installed_or_connected_plugin_needs_updating() {
+        assert_eq!(state(Some("0.1.1"), None).update_available().as_deref(), Some("0.2.0"));
+        assert_eq!(state(None, Some("0.1.1")).update_available().as_deref(), Some("0.2.0"));
+        // An install from before the plug-in had a readable version.
+        assert_eq!(state(Some(""), None).update_available().as_deref(), Some("0.2.0"));
+    }
+
+    #[test]
+    fn current_missing_or_newer_plugins_dont() {
+        assert_eq!(state(Some("0.2.0"), Some("0.2.0")).update_available(), None);
+        assert_eq!(state(None, None).update_available(), None);
+        assert_eq!(state(Some("0.3.0"), None).update_available(), None);
     }
 }
 
@@ -393,69 +559,100 @@ mod update_check_tests {
 /// pops in on whichever frame comes after the load finishes, woken via
 /// `AppEvent::Redraw` in case nothing else was already scheduling one.
 pub struct FontBytesPrefetcher {
-    bytes_ready: Arc<Mutex<HashMap<i64, Arc<[u8]>>>>,
-    glyphs_ready: Arc<Mutex<HashMap<i64, Arc<Option<HashSet<u32>>>>>>,
+    /// Read but not yet picked up. `poll_bytes` *takes* them — once a
+    /// preview registers a font with fontique, fontique holds the bytes, and
+    /// keeping a second copy here was pure waste. Reads for tiles that
+    /// scrolled away before their bytes arrived are never picked up, so
+    /// `prune` drops them after `UNCLAIMED_BYTES_TTL`.
+    bytes_ready: Arc<Mutex<HashMap<i64, (Vec<u8>, Instant)>>>,
     failed: Arc<Mutex<HashSet<i64>>>,
+    /// Queued or being read — so a tile asking every frame queues once.
     pending: Arc<Mutex<HashSet<i64>>>,
-    proxy: EventLoopProxy<AppEvent>,
+    /// Waiting reads, newest last. A fixed pool of `READER_THREADS` works
+    /// through it newest-first, and past `MAX_QUEUED_READS` the oldest are
+    /// dropped: a fast scroll asks for every tile it flashes past, and
+    /// reading all of them (a thread each, as this used to) spiked memory
+    /// by gigabytes for fonts nobody would see.
+    queue: Arc<(Mutex<Vec<(i64, String)>>, std::sync::Condvar)>,
 }
+
+const READER_THREADS: usize = 6;
+const MAX_QUEUED_READS: usize = 96;
 
 impl FontBytesPrefetcher {
     pub fn new(proxy: EventLoopProxy<AppEvent>) -> Self {
-        Self {
+        let prefetcher = Self {
             bytes_ready: Arc::new(Mutex::new(HashMap::new())),
-            glyphs_ready: Arc::new(Mutex::new(HashMap::new())),
             failed: Arc::new(Mutex::new(HashSet::new())),
             pending: Arc::new(Mutex::new(HashSet::new())),
-            proxy,
+            queue: Arc::new((Mutex::new(Vec::new()), std::sync::Condvar::new())),
+        };
+        for _ in 0..READER_THREADS {
+            let queue = Arc::clone(&prefetcher.queue);
+            let bytes_ready = Arc::clone(&prefetcher.bytes_ready);
+            let failed = Arc::clone(&prefetcher.failed);
+            let pending = Arc::clone(&prefetcher.pending);
+            let proxy = proxy.clone();
+            std::thread::spawn(move || loop {
+                let (id, path) = {
+                    let (lock, ready) = &*queue;
+                    let mut waiting = lock.lock().unwrap();
+                    loop {
+                        if let Some(job) = waiting.pop() {
+                            break job;
+                        }
+                        waiting = ready.wait(waiting).unwrap();
+                    }
+                };
+                match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        bytes_ready.lock().unwrap().insert(id, (bytes, Instant::now()));
+                    }
+                    Err(_) => {
+                        failed.lock().unwrap().insert(id);
+                    }
+                }
+                pending.lock().unwrap().remove(&id);
+                let _ = proxy.send_event(AppEvent::Redraw);
+            });
         }
+        prefetcher
     }
 
-    /// Kicks off a background read+parse for `id`/`path` if one isn't
-    /// already in flight or done — idempotent, so both `poll_bytes` and
-    /// `poll_glyphs` can call it freely without double-reading the file.
+    /// Queues a read for `id`/`path` unless one is already queued, in
+    /// flight, or waiting to be picked up.
     fn ensure_spawned(&self, id: i64, path: &str) {
-        let mut pending = self.pending.lock().unwrap();
-        if !pending.insert(id) {
+        if self.bytes_ready.lock().unwrap().contains_key(&id) {
             return;
         }
-        drop(pending);
-        let bytes_ready = Arc::clone(&self.bytes_ready);
-        let glyphs_ready = Arc::clone(&self.glyphs_ready);
-        let failed = Arc::clone(&self.failed);
-        let pending = Arc::clone(&self.pending);
-        let proxy = self.proxy.clone();
-        let path = path.to_string();
-        std::thread::spawn(move || {
-            match std::fs::read(&path) {
-                Ok(bytes) => {
-                    let glyphs = crate::font_info::codepoint_set(&bytes);
-                    glyphs_ready.lock().unwrap().insert(id, Arc::new(glyphs));
-                    bytes_ready.lock().unwrap().insert(id, Arc::from(bytes));
-                }
-                Err(_) => {
-                    failed.lock().unwrap().insert(id);
-                }
+        if !self.pending.lock().unwrap().insert(id) {
+            return;
+        }
+        let (lock, ready) = &*self.queue;
+        let mut waiting = lock.lock().unwrap();
+        waiting.push((id, path.to_string()));
+        if waiting.len() > MAX_QUEUED_READS {
+            let excess = waiting.len() - MAX_QUEUED_READS;
+            let dropped: Vec<i64> = waiting.drain(..excess).map(|(id, _)| id).collect();
+            let mut pending = self.pending.lock().unwrap();
+            for id in dropped {
+                pending.remove(&id);
             }
-            pending.lock().unwrap().remove(&id);
-            let _ = proxy.send_event(AppEvent::Redraw);
-        });
+        }
+        ready.notify_one();
     }
 
-    fn poll_bytes(&self, id: i64, path: &str) -> Prefetch<Arc<[u8]>> {
-        if let Some(bytes) = self.bytes_ready.lock().unwrap().get(&id) {
-            return Prefetch::Ready(Arc::clone(bytes));
-        }
-        if self.failed.lock().unwrap().contains(&id) {
-            return Prefetch::Failed;
-        }
-        self.ensure_spawned(id, path);
-        Prefetch::Pending
+    /// Drops reads nobody picked up in time — see `bytes_ready`.
+    fn prune(&self) {
+        self.bytes_ready
+            .lock()
+            .unwrap()
+            .retain(|_, (_, loaded)| loaded.elapsed() < UNCLAIMED_BYTES_TTL);
     }
 
-    fn poll_glyphs(&self, id: i64, path: &str) -> Prefetch<Arc<Option<HashSet<u32>>>> {
-        if let Some(glyphs) = self.glyphs_ready.lock().unwrap().get(&id) {
-            return Prefetch::Ready(Arc::clone(glyphs));
+    fn poll_bytes(&self, id: i64, path: &str) -> Prefetch<Vec<u8>> {
+        if let Some((bytes, _)) = self.bytes_ready.lock().unwrap().remove(&id) {
+            return Prefetch::Ready(bytes);
         }
         if self.failed.lock().unwrap().contains(&id) {
             return Prefetch::Failed;
@@ -488,20 +685,10 @@ pub struct App {
     pub active_ids: HashSet<i64>,
     pub favorite_ids: HashSet<i64>,
     pub preview_cache: PreviewCache,
-    /// Backs both `preview_cache` and `glyph_sets`' first-load path — see
-    /// `FontBytesPrefetcher`.
+    /// Backs `preview_cache`'s first-load path — see `FontBytesPrefetcher`.
     font_prefetch: FontBytesPrefetcher,
-    /// Font-id -> the real (non-`.notdef`) codepoints that font has, cached
-    /// the same way `preview_cache` is — see `App::covers_sample`, which is
-    /// what actually uses this: a tile whose font can't render the current
-    /// sample text falls back to a dimmed system-font rendering instead of
-    /// silently substituting a font that reads as if it were supported.
-    /// `Arc`-wrapped since `FontBytesPrefetcher` computes these on a
-    /// background thread and hands them over already built — storing the
-    /// `Arc` directly avoids cloning a potentially large `HashSet<u32>`
-    /// (a CJK-heavy font can have thousands of codepoints) just to move it
-    /// from the prefetcher's cache into this one.
-    pub glyph_sets: HashMap<i64, Arc<Option<HashSet<u32>>>>,
+    /// Counts drawn frames — the preview cache's recency clock.
+    pub frame: u64,
 
     pub filter: Filter,
     pub view_mode: ViewMode,
@@ -643,6 +830,13 @@ pub struct App {
     /// here, in memory only, so quitting can uninstall every one of them
     /// before the process actually ends. See `catalog::activate_temporarily`.
     pub temp_active_ids: HashSet<i64>,
+    /// "Hide missing" (the sample-text card's chip, View ▸ Hide Fonts
+    /// Missing Characters): hides fonts lacking any character of the sample
+    /// text. Off at launch on purpose — see `toggle_hide_missing`.
+    pub hide_missing: bool,
+    pub coverage: crate::coverage::CoverageIndex,
+    /// How many fonts the last grid/list rebuild hid — the chip's label.
+    pub hidden_missing_count: usize,
     /// A pending "Delete from Library" click, waiting on the confirmation
     /// overlay (`ui::draw_delete_confirm`) before `catalog::delete_font_file`
     /// actually runs — deleting the real file is unrecoverable and, for a
@@ -655,6 +849,8 @@ pub struct App {
     /// UI-present-but-not-yet-wired-to-the-OS.
     pub settings: Settings,
     pub settings_open: bool,
+    pub settings_tab: SettingsTab,
+    pub integrations: IntegrationsState,
     /// The About overlay — see `ui::about::draw`.
     pub about_open: bool,
     /// The Appearance dropdown's open/closed state — same pattern as
@@ -773,6 +969,8 @@ impl App {
         // Belt-and-suspenders: restores anything `active_memory` (see
         // `catalog.rs`) says should be active but isn't right now, on
         // every launch — not just after an explicit add/rescan.
+        catalog.drop_leftover_temporary_activations();
+        catalog.repair_activations();
         catalog.reconcile_activation();
 
         let folders = load_folders(&catalog);
@@ -786,6 +984,15 @@ impl App {
                 .map(|entry| entry.id),
         );
         let favorite_ids = catalog.favorite_ids().unwrap_or_default();
+        // Read now (not just when Settings opens) so an out-of-date
+        // Illustrator plug-in can show its update banner at launch.
+        let mut integrations = IntegrationsState::default();
+        integrations.refresh();
+        let settings = Settings::load();
+        let mut coverage = crate::coverage::CoverageIndex::default();
+        if let Ok(rows) = catalog.coverage() {
+            coverage.load(rows);
+        }
         let tags = catalog.list_tags().unwrap_or_default();
         let tag_font_ids = catalog.font_tags().unwrap_or_default();
         let update_proxy = redraw_proxy.clone();
@@ -807,7 +1014,7 @@ impl App {
             update_proxy,
             preview_cache: HashMap::new(),
             font_prefetch: FontBytesPrefetcher::new(redraw_proxy),
-            glyph_sets: HashMap::new(),
+            frame: 0,
             filter: Filter::All,
             view_mode: ViewMode::Grid,
             search: String::new(),
@@ -853,9 +1060,14 @@ impl App {
             drag_hovering: false,
             drag_hover_since: None,
             temp_active_ids: HashSet::new(),
+            hide_missing: false,
+            coverage,
+            hidden_missing_count: 0,
             confirm_delete: None,
-            settings: Settings::load(),
+            settings,
             settings_open: false,
+            settings_tab: SettingsTab::General,
+            integrations,
             about_open: false,
             appearance_dropdown_open: false,
             // Overwritten as soon as `resumed()` has a real `Window` to
@@ -867,8 +1079,8 @@ impl App {
             drop_flash_until: None,
             list_columns: default_list_columns(),
             list_sort: ListSort {
-                column: ListColumnKind::DateAdded,
-                ascending: false,
+                column: settings.sort_field,
+                ascending: settings.sort_ascending,
             },
             expanded_families: HashSet::new(),
             list_groups_cache: None,
@@ -945,6 +1157,141 @@ impl App {
     /// O(1) id -> entry, via `entries_by_id` — the one lookup every other
     /// by-id accessor in the UI should go through rather than scanning
     /// `entries` itself.
+    /// A cheap, order-independent fingerprint of the state an Enabled or
+    /// Tags sort depends on, so the grid/list caches re-sort when a font is
+    /// activated or tagged. 0 for every other field (their inputs are
+    /// already covered by the entries/favorites versions).
+    pub fn sort_signature(&self) -> u64 {
+        fn mix(mut x: u64) -> u64 {
+            x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            x ^ (x >> 31)
+        }
+        match self.list_sort.column {
+            SortField::Enabled => self
+                .active_ids
+                .iter()
+                .fold(self.active_ids.len() as u64, |acc, &id| acc.wrapping_add(mix(id as u64))),
+            SortField::Tags => {
+                let mut acc = self.tags.len() as u64;
+                for tag in &self.tags {
+                    for byte in tag.name.bytes() {
+                        acc = mix(acc ^ byte as u64);
+                    }
+                }
+                for (&tag, ids) in &self.tag_font_ids {
+                    for &id in ids {
+                        acc = acc.wrapping_add(mix((tag as u64).rotate_left(32) ^ id as u64));
+                    }
+                }
+                acc
+            }
+            _ => 0,
+        }
+    }
+
+    /// Each tagged font's alphabetically first tag name (lowercased) — the
+    /// Tags sort's key.
+    pub fn first_tag_names(&self) -> HashMap<i64, String> {
+        let mut first: HashMap<i64, String> = HashMap::new();
+        for tag in &self.tags {
+            let Some(ids) = self.tag_font_ids.get(&tag.id) else { continue };
+            let name = tag.name.to_lowercase();
+            for &id in ids {
+                match first.get(&id) {
+                    Some(existing) if *existing <= name => {}
+                    _ => {
+                        first.insert(id, name.clone());
+                    }
+                }
+            }
+        }
+        first
+    }
+
+    /// The sample text's distinct characters — what "Hide missing" checks.
+    pub fn sample_chars(&self) -> Vec<u32> {
+        let mut chars: Vec<u32> = self.effective_sample_text().chars().map(|c| c as u32).collect();
+        chars.sort_unstable();
+        chars.dedup();
+        chars
+    }
+
+    /// Changes whenever "Hide missing" would hide a different set of fonts:
+    /// toggled, a new sample text, or more coverage results landing. 0
+    /// while it's off, so the caches ignore sample-text edits then.
+    pub fn coverage_signature(&self) -> u64 {
+        if !self.hide_missing {
+            return 0;
+        }
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.effective_sample_text().hash(&mut hasher);
+        self.coverage.version().hash(&mut hasher);
+        hasher.finish() | 1
+    }
+
+    /// Flips "Hide missing" — instant, since every font's coverage is
+    /// already in memory (see `coverage`).
+    pub fn toggle_hide_missing(&mut self) {
+        self.hide_missing = !self.hide_missing;
+        self.scroll_y = 0.0;
+    }
+
+    /// Reloads the coverage index from the catalog — at launch and after
+    /// every rescan, which is when new or changed fonts get theirs.
+    pub fn reload_coverage(&mut self) {
+        if let Ok(rows) = self.catalog.coverage() {
+            self.coverage.load(rows);
+        }
+    }
+
+    /// `visible_entries` minus what "Hide missing" hides, and how many
+    /// that was.
+    pub fn filtered_visible_entries(&self) -> (Vec<&FontEntry>, usize) {
+        let entries = self.visible_entries();
+        if !self.hide_missing {
+            return (entries, 0);
+        }
+        let chars = self.sample_chars();
+        let before = entries.len();
+        let kept: Vec<&FontEntry> = entries
+            .into_iter()
+            .filter(|e| self.coverage.missing_any(e.id, &chars) != Some(true))
+            .collect();
+        let hidden = before - kept.len();
+        (kept, hidden)
+    }
+
+    /// The grid's order: the filtered `visible_entries` (already by family,
+    /// then weight) re-sorted by `list_sort`. Stable, so ties keep that
+    /// order. Also returns how many "Hide missing" hid.
+    pub fn sorted_visible_ids(&self) -> (Vec<i64>, usize) {
+        let (mut entries, hidden) = self.filtered_visible_entries();
+        let sort = self.list_sort;
+        let first_tag = if sort.column == SortField::Tags { self.first_tag_names() } else { HashMap::new() };
+        let family_key = |e: &FontEntry| e.family.to_lowercase();
+        entries.sort_by(|a, b| {
+            let ordering = match sort.column {
+                SortField::Name | SortField::Styles | SortField::Category => {
+                    if sort.column == SortField::Name {
+                        family_key(a).cmp(&family_key(b))
+                    } else {
+                        std::cmp::Ordering::Equal
+                    }
+                }
+                SortField::Enabled => self.active_ids.contains(&a.id).cmp(&self.active_ids.contains(&b.id)),
+                SortField::Starred => self.favorite_ids.contains(&a.id).cmp(&self.favorite_ids.contains(&b.id)),
+                SortField::DateAdded => a.mtime.cmp(&b.mtime),
+                SortField::Format => crate::font::format_label(&a.path).cmp(crate::font::format_label(&b.path)),
+                SortField::Tags => tag_order(first_tag.get(&a.id), first_tag.get(&b.id)),
+            };
+            if sort.ascending { ordering } else { ordering.reverse() }
+        });
+        (entries.into_iter().map(|e| e.id).collect(), hidden)
+    }
+
     pub fn entry(&self, id: i64) -> Option<&FontEntry> {
         self.entries_by_id.get(&id).map(|&i| &self.entries[i])
     }
@@ -957,6 +1304,8 @@ impl App {
     }
 
     pub fn reload_folders_and_fonts(&mut self, status: String) {
+        // New or changed fonts got their coverage during the rescan.
+        self.reload_coverage();
         self.status = status;
         self.folders = load_folders(&self.catalog);
         self.reload_fonts();
@@ -1018,70 +1367,75 @@ impl App {
     /// while a fresh id's load is still pending (the background read
     /// hasn't landed yet — see `FontBytesPrefetcher`) or it failed.
     pub fn preview_family(&mut self, text: &mut TextCx, id: i64) -> Option<String> {
-        if let Some(cached) = self.preview_cache.get(&id) {
-            return cached.clone();
+        let frame = self.frame;
+        if let Some(cached) = self.preview_cache.get_mut(&id) {
+            cached.last_used = frame;
+            return cached.family.clone();
         }
         let Some(path) = self.entry(id).map(|e| e.path.clone()) else {
             return None;
         };
-        match self.font_prefetch.poll_bytes(id, &path) {
-            Prefetch::Ready(bytes) => {
-                let family = text.register_font_bytes(bytes.to_vec());
-                self.preview_cache.insert(id, family.clone());
-                family
-            }
+        let (family, faces) = match self.font_prefetch.poll_bytes(id, &path) {
+            Prefetch::Ready(bytes) => match text.register_font_bytes(bytes) {
+                Some((family, faces)) => (Some(family), faces),
+                None => (None, Vec::new()),
+            },
             // Not cached either way: the real answer is still in flight,
             // ask again next frame instead of locking in "no family" now.
-            Prefetch::Pending => None,
-            Prefetch::Failed => {
-                self.preview_cache.insert(id, None);
-                None
-            }
-        }
+            Prefetch::Pending => return None,
+            Prefetch::Failed => (None, Vec::new()),
+        };
+        self.preview_cache.insert(id, PreviewEntry { family: family.clone(), faces, last_used: frame });
+        family
     }
 
-    /// `id`'s real glyph coverage, loaded and cached the first time it's
-    /// asked for. The codepoint-set parse itself already happened on
-    /// `FontBytesPrefetcher`'s background thread — this just picks up the
-    /// already-built result, no main-thread cmap parsing.
-    fn glyph_set(&mut self, id: i64) -> Option<&HashSet<u32>> {
-        if !self.glyph_sets.contains_key(&id) {
-            let Some(path) = self.entry(id).map(|e| e.path.clone()) else {
-                self.glyph_sets.insert(id, Arc::new(None));
-                // `Arc<Option<HashSet<u32>>>` -> `Option<&HashSet<u32>>`:
-                // the first `as_ref()` unwraps the `Arc` (`&Option<..>`),
-                // the second unwraps the `Option` (`Option<&..>`).
-                return self.glyph_sets.get(&id).and_then(|s| s.as_ref().as_ref());
-            };
-            match self.font_prefetch.poll_glyphs(id, &path) {
-                Prefetch::Ready(set) => {
-                    self.glyph_sets.insert(id, set);
-                }
-                // Leave uncached — retry on a later frame once the
-                // background load lands, rather than freezing in "no
-                // known coverage" forever.
-                Prefetch::Pending => return None,
-                Prefetch::Failed => {
-                    self.glyph_sets.insert(id, Arc::new(None));
-                }
+    /// Past `PREVIEW_CACHE_CAP` registered previews, unregisters the least
+    /// recently drawn down to `PREVIEW_CACHE_KEEP` — called once per frame
+    /// after drawing, so nothing on screen is ever evicted.
+    pub fn evict_previews(&mut self, text: &mut TextCx) {
+        self.frame += 1;
+        self.font_prefetch.prune();
+        if self.preview_cache.len() <= PREVIEW_CACHE_CAP {
+            return;
+        }
+        let mut by_age: Vec<(u64, i64)> = self.preview_cache.iter().map(|(&id, e)| (e.last_used, id)).collect();
+        by_age.sort_unstable();
+        let evict = self.preview_cache.len() - PREVIEW_CACHE_KEEP;
+        let mut evicted_families = HashSet::new();
+        for &(_, id) in &by_age[..evict] {
+            if let Some(entry) = self.preview_cache.remove(&id) {
+                text.unregister_faces(&entry.faces);
+                evicted_families.extend(entry.family);
             }
         }
-        self.glyph_sets.get(&id).and_then(|s| s.as_ref().as_ref())
+        // fontique knows a registered font only by family name + style, so
+        // evicting one copy of a font (libraries often hold duplicates) can
+        // take out the face a still-cached copy was drawing with. Drop those
+        // too; they re-register from disk on their next draw.
+        let orphaned: Vec<i64> = self
+            .preview_cache
+            .iter()
+            .filter(|(_, e)| e.family.as_ref().is_some_and(|f| evicted_families.contains(f)))
+            .map(|(&id, _)| id)
+            .collect();
+        for id in orphaned {
+            if let Some(entry) = self.preview_cache.remove(&id) {
+                text.unregister_faces(&entry.faces);
+            }
+        }
+        // Cached layouts hold the evicted fonts' data too.
+        text.clear_layout_cache();
     }
 
     /// Whether `id` actually has real glyphs for every character in the
     /// current sample text — a tile whose font fails this falls back to a
     /// dimmed system-font rendering rather than one that reads as
-    /// supported when it isn't (see `ui::grid`/`ui::list`). Fails open
-    /// (`true`) when coverage can't be determined at all, e.g. the file
-    /// couldn't be parsed — that's a different, rarer failure than "this
-    /// font doesn't have these glyphs" and shouldn't look the same.
+    /// supported when it isn't (see `ui::grid`/`ui::list`). Answered from
+    /// the catalog's coverage (see `coverage`), so no file is read. Fails
+    /// open (`true`) when coverage isn't known.
     pub fn covers_sample(&mut self, id: i64) -> bool {
-        let sample = self.effective_sample_text().to_string();
-        match self.glyph_set(id) {
-            Some(set) => sample.chars().all(|c| set.contains(&(c as u32))),
-            None => true,
-        }
+        let chars = self.sample_chars();
+        self.coverage.missing_any(id, &chars) != Some(true)
     }
 
     /// The Sizes/Glyphs/Info tabs' shared data — extracted from `id`'s own
@@ -1098,6 +1452,16 @@ impl App {
             self.font_info = info.map(|info| (id, info));
         }
         self.font_info.as_ref().filter(|(cached_id, _)| *cached_id == id).map(|(_, info)| info)
+    }
+}
+
+/// Tags sort order: tagged before untagged, then by first tag name.
+pub fn tag_order(a: Option<&String>, b: Option<&String>) -> std::cmp::Ordering {
+    match (a, b) {
+        (Some(a), Some(b)) => a.cmp(b),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
     }
 }
 

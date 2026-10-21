@@ -8,22 +8,19 @@ use std::collections::{BTreeSet, HashSet};
 
 use ttf_parser::Face;
 
-/// Every codepoint `data` actually has a real glyph for (not `.notdef`) —
-/// the lightweight half of `extract`, used wherever only glyph coverage
-/// matters (e.g. `App::covers_sample`'s "does this font actually have the
-/// tile preview's characters" check) and re-parsing the whole `name`
-/// table + collecting into a sorted `Vec` would be wasted work.
-pub fn codepoint_set(data: &[u8]) -> Option<HashSet<u32>> {
-    let face = Face::parse(data, 0).ok()?;
-    Some(real_codepoints(&face))
-}
-
-fn real_codepoints(face: &Face) -> HashSet<u32> {
+/// Every codepoint `face` actually has a real glyph for (not `.notdef`) —
+/// what scanning stores as each face's coverage (see `coverage`).
+pub fn real_codepoints(face: &Face) -> HashSet<u32> {
     let mut codepoints = HashSet::new();
     if let Some(cmap) = face.tables().cmap {
         for subtable in cmap.subtables {
+            // Asks this subtable directly rather than `face.glyph_index`,
+            // which would search every subtable again for each codepoint.
+            if !subtable.is_unicode() {
+                continue;
+            }
             subtable.codepoints(|cp| {
-                if char::from_u32(cp).is_some_and(|ch| face.glyph_index(ch).is_some_and(|g| g.0 != 0)) {
+                if subtable.glyph_index(cp).is_some_and(|g| g.0 != 0) {
                     codepoints.insert(cp);
                 }
             });
