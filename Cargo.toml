@@ -13,6 +13,12 @@ edition = "2021"
 name = "GlyphClub"
 path = "src/main.rs"
 
+# The gpui front end replacing the hand-drawn one above. Built on the
+# UI-free core in src/lib.rs.
+[[bin]]
+name = "GlyphClubNext"
+path = "src/next/main.rs"
+
 [dependencies]
 anyhow = "1"
 dirs = "7"
@@ -45,6 +51,8 @@ pollster = "0.4"
 parley = { version = "0.11", features = ["system"] }
 skrifa = "0.44"
 rfd = "0.15"
+# The gpui front end (src/next): gpui plus its component library.
+gpui-kit = "0.8.0"
 notify-debouncer-mini = "0.7.0"
 filetime = "0.2.29"
 # Local-time formatting for the list view's Date Added column.
