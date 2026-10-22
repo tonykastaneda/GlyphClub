@@ -1,9 +1,8 @@
 //! Settings ▸ General ▸ Menu Bar (macOS) / System Tray (Windows): when it's
 //! on, GlyphClub starts silently with just this icon — the Illustrator
 //! plug-in can start it without a window popping up — and closing the
-//! window hides it back here instead of quitting. `main.rs` owns the
-//! window side of that (hiding/showing, and on macOS switching between a
-//! Dock app and a menu-bar-only one); this is the icon and its menu.
+//! window hides it back here instead of quitting. `src/gui/main.rs` owns
+//! the window side of that; this is the icon and its menu.
 
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -53,9 +52,8 @@ impl Tray {
         })
     }
 
-    /// Whether `event` is one of this menu's items. The macOS menu bar
-    /// (`native_menu.rs`) shares muda's one event channel, so `main.rs`
-    /// drains it once and offers each event to both.
+    /// Whether `event` is one of this menu's items (the app drains tray-icon's
+    /// menu event channel and offers each event here).
     pub fn menu_action(&self, event: &MenuEvent) -> Option<TrayAction> {
         if event.id == self.open_id {
             Some(TrayAction::Open)

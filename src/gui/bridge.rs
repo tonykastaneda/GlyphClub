@@ -1,7 +1,6 @@
 //! The local connection the GlyphClub Illustrator plug-in (see `plugin/`)
-//! uses to ask for missing fonts — the same protocol and `bridge.json`
-//! session file as `src/illustrator_bridge.rs`, which serves the old front
-//! end. It listens on a random loopback port and writes that port plus a
+//! uses to ask for missing fonts, and that glyphclub-cli uses to drive the
+//! app. It listens on a random loopback port and writes that port plus a
 //! fresh token to `bridge.json` (mode 0600), so only this user's processes
 //! can find and use it.
 //!

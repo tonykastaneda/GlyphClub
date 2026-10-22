@@ -1,5 +1,5 @@
-//! Settings ▸ Integrations: installing GlyphClub's Illustrator plug-in (see
-//! `plugin/` and `illustrator_bridge`) into each Illustrator on this Mac.
+//! Settings ▸ Auto Activation: installing GlyphClub's Illustrator plug-in
+//! (see `plugin/` and `src/gui/bridge.rs`) into each Illustrator on this Mac.
 //!
 //! The plug-in ships inside GlyphClub.app (`Contents/Resources/GlyphClub.aip`,
 //! put there by `scripts/package-macos.sh`); a `cargo run` build uses

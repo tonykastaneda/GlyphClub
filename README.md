@@ -30,8 +30,13 @@ reads plain folders, with a native GPUI interface.
   grid with Unicode block filtering, and an Info tab with extracted
   metadata. Resizable by dragging its edge.
 - **Light and Dark themes**, following System Default or set explicitly.
-- **A real native menu bar on macOS** (via `muda`), and a matching
-  hand-rolled one on Windows.
+- **Icon Fonts**: 28 free icon sets (Font Awesome, Material, Phosphor,
+  Tabler, Lucide and more) with named, searchable icons. Drag one into
+  Illustrator and it lands as editable vector artwork.
+- **A native menu bar on macOS**, and the same menus inside the window on
+  Windows.
+- **`glyphclub-cli`** to manage libraries and fonts from the terminal and to
+  drive the running app.
 
 ## Illustrator plug-in (macOS)
 
@@ -46,7 +51,7 @@ picks the fonts up itself, even while its Missing Fonts dialog is open.
 **Window ▸ Glyph Club** shows the connection, an auto-activate switch and
 recent activity.
 
-Install it from **Settings ▸ Integrations**, which copies it into each
+Install it from **Settings ▸ Auto Activation**, which copies it into each
 Illustrator 2026 in `/Applications` (using the macOS administrator prompt,
 since the Plug-ins folder is owned by root). To build it yourself you need
 only the Command Line Tools and Adobe's Illustrator SDK at
@@ -56,12 +61,12 @@ only the Command Line Tools and Adobe's Illustrator SDK at
 make -C plugin          # plugin/build/GlyphClub.aip, arm64, signed ad hoc
 ```
 
-A `cargo run` build offers that copy in Integrations.
+A `cargo run` build offers that copy in Settings ▸ Auto Activation.
 
 The plug-in has its own version in `plugin/VERSION`, separate from the
 app's. Bump it whenever the plug-in changes, and only then. When an installed
 (or connected) plug-in is older than the one GlyphClub ships, GlyphClub shows
-an update banner that opens Integrations, and the plug-in's panel says the
+an update notice pointing to Settings ▸ Auto Activation, and the plug-in's panel says the
 same with an **Open Glyph Club** button. Release builds bundle
 it into GlyphClub.app when the SDK is available (see `scripts/package-macos.sh`
 and the optional `ILLUSTRATOR_SDK_TOKEN` secret in the release workflow).
@@ -110,11 +115,13 @@ that profile name, which the script uses by default.
 
 ## Project layout
 
-- `src/next/` — the main GPUI application, views, settings and Illustrator bridge.
+- `src/gui/` — the main GPUI application, views, settings and Illustrator bridge.
 - `src/lib.rs` and the shared modules in `src/` — catalog, scanning,
   activation and font metadata. `src/cli/` contains the command-line tool.
 - `vendor/` — the GPUI patch supporting direct vector artwork dragging.
 - `plugin/` — the Illustrator plug-in (C++/Objective-C++, built with `make`).
-- `branding/` — the source SVGs/icon assets this README and the app's own
-  UI (format badges, dock icon, wordmark) are drawn from.
+- `assets/icon-fonts/` — the bundled icon sets with their licenses, fetched
+  by `scripts/fetch-icon-fonts.py`.
+- `branding/` — the source SVGs/icon assets for this README and the app
+  (dock icon, menu bar icon, Windows icon).
 - `docs/` — the project's marketing site.

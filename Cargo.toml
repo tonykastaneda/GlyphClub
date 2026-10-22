@@ -8,7 +8,7 @@ autobins = false
 # The GPUI application is the standard executable on both platforms.
 [[bin]]
 name = "GlyphClub"
-path = "src/next/main.rs"
+path = "src/gui/main.rs"
 
 # glyphclub-cli: libraries, fonts and activation from the terminal, and
 # driving the running app's UI over its local bridge.
@@ -19,67 +19,42 @@ path = "src/cli/main.rs"
 [dependencies]
 anyhow = "1"
 dirs = "7"
-# Only used to hard-disable the `log` facade at startup (see `main.rs`) —
-# parley's text shaping logs a `log::warn!` through it on every single
-# layout call that touches a CJK codepoint with no ICU4X segmentation data
-# bundled (common: plenty of macOS system font names are CJK), and at
-# real-library scale (100k+ fonts) that's enough log-formatting-and-I/O
-# overhead alone to visibly stall the UI, independent of the (also real,
-# also fixed) O(n) algorithmic issues elsewhere in this pass.
-log = "0.4"
 rayon = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 ttf-parser = "0.25"
 walkdir = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Only used for the startup update check (see app::check_for_update) — a
-# single blocking GET against the GitHub releases API on a background
-# thread, so this deliberately stays a small synchronous client rather
-# than pulling in an async runtime just for that.
+# The update check: one blocking GET against the GitHub releases API on a
+# background thread, so a small synchronous client rather than an async
+# runtime.
 ureq = { version = "3", features = ["json"] }
-
-# GUI: no widget toolkit — winit owns the window/event loop, wgpu is the
-# GPU backend, vello rasterizes the scene onto it. vello re-exports its
-# matched wgpu/kurbo/peniko versions, so those aren't pinned separately.
-vello = "0.10"
-winit = "0.30"
-pollster = "0.4"
-parley = { version = "0.11", features = ["system"] }
-skrifa = "0.44"
-rfd = "0.15"
-# The gpui front end (src/next): gpui plus its component library.
+# The app's UI (src/gui): gpui plus its component library.
 gpui-kit = "0.8.0"
 # glyphclub-cli's argument parsing.
 clap = { version = "4.6", features = ["derive"] }
+# Watching library folders for changes.
 notify-debouncer-mini = "0.7.0"
 filetime = "0.2.29"
 # Local-time formatting for the list view's Date Added column.
 chrono = "0.4"
-# Decodes the branding PNGs into RGBA — winit's window icon on Windows and
-# the menu bar / system tray icon (see `tray.rs`). png-only.
+# Decodes the branding PNGs for the menu bar / system tray icon and icon
+# drag previews. png-only.
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
-# The system tray icon (see `tray.rs`). 0.24 because it's the release
-# built on muda 0.19 — the same MenuEvent channel as the macOS menu bar.
+# The system tray icon (see `tray.rs`).
 tray-icon = { version = "0.24", default-features = false }
 
-# Direct NSWindow access to reposition the traffic-light buttons ourselves,
-# since macOS otherwise places them at its own fixed inset regardless of
-# our layout. NSApplication/NSImage set the real dock icon from the same
-# branding PNG.
+# AppKit/Foundation for the dock icon, the icon drag pasteboard and reading
+# a file's Date Added.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSButton", "NSView", "NSApplication", "NSImage", "NSRunningApplication", "NSResponder", "NSPasteboard", "NSPasteboardItem"] }
 objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSData", "NSUserDefaults", "NSString", "NSURL", "NSDate", "NSError"] }
-# The menu bar icon (see `tray.rs`) — same crate as Windows' system tray.
+# The menu bar icon (see `tray.rs`), same crate as Windows' system tray.
 tray-icon = { version = "0.24", default-features = false }
-# The native macOS menu bar (see `native_menu.rs`) — same crate/version
-# Amalith uses for its own menu bar, kept off Windows for now since that
-# platform has its own separate menu plan.
-muda = "0.19"
 
 [target.'cfg(windows)'.build-dependencies]
 # Embeds branding/windows/GlyphClub.ico into the built .exe itself (see

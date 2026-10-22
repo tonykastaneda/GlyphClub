@@ -74,10 +74,9 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// `on_change` fires (from the watcher's own background thread —
-    /// callers that need to touch UI state should hop back to their main
-    /// thread, e.g. via a `winit::event_loop::EventLoopProxy`) whenever a
-    /// watched folder changes. Debounced to one call per ~800ms of
+    /// `on_change` fires whenever a watched folder changes, from the
+    /// watcher's own background thread (callers that touch UI state should
+    /// hop back to their main thread). Debounced to one call per ~800ms of
     /// activity, not once per individual file event.
     pub fn open(on_change: impl Fn() + Send + 'static) -> Result<Self> {
         let mut store = Store::open(&catalog_path())?;
@@ -343,7 +342,7 @@ impl Catalog {
 
     /// Deactivates whatever the last session activated temporarily but
     /// never cleaned up (a crash, a force quit, logging out — anything
-    /// that skipped `ui::cleanup_before_quit`), so those don't turn into
+    /// that skipped the app's quit cleanup), so those don't turn into
     /// permanent activations. Run at launch, before this session activates
     /// anything temporarily itself.
     pub fn drop_leftover_temporary_activations(&mut self) -> usize {
@@ -391,8 +390,8 @@ impl Catalog {
     /// active for the rest of this session (and, like any other active
     /// font, survives a folder remove/re-add via `reconcile_activation`)
     /// but won't be restored on the next launch, and gets uninstalled
-    /// outright when the app quits — see `main.rs`'s quit handling and
-    /// `App::temp_active_ids`, which is what actually makes it temporary.
+    /// outright when the app quits (see `deactivate_on_quit` in
+    /// `src/gui/app.rs`), which is what actually makes it temporary.
     /// A no-op if `id` is already active, temporarily or not.
     pub fn activate_temporarily(&mut self, id: i64) -> Result<bool> {
         if self.store.active_ids()?.contains(&id) {

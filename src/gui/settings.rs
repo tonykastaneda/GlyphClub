@@ -1,5 +1,5 @@
-//! Persisted preferences, in the same `settings.json` (and format) the old
-//! front end uses, so switching between them keeps your choices.
+//! Persisted preferences, in `settings.json` next to the catalog. Unknown
+//! fields are ignored and missing ones take defaults, so older files load.
 
 use std::path::PathBuf;
 
@@ -22,8 +22,7 @@ pub enum Appearance {
     Dark,
 }
 
-/// Same variant names as the old front end's `app::SortField`, which is
-/// what's in existing settings files.
+/// Variant names are what's stored in settings.json, so don't rename them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum SortField {
     Enabled,

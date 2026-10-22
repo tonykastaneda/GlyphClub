@@ -1,5 +1,5 @@
 //! GlyphClub’s shared core: catalog, scanning, activation, fonts and OS integrations.
-//! The main GPUI application in `src/next` and the CLI both build on this.
+//! The main GPUI application in `src/gui` and the CLI both build on this.
 
 pub mod activate;
 pub mod added;

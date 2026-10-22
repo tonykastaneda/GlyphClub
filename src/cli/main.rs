@@ -541,7 +541,7 @@ fn app_request(method: &str) -> Result<Value> {
     app_call(json!({ "method": method }))
 }
 
-/// One request over the app's local bridge (see `src/next/bridge.rs`).
+/// One request over the app's local bridge (see `src/gui/bridge.rs`).
 fn app_call(mut request: Value) -> Result<Value> {
     let session = dirs::data_dir()
         .or_else(dirs::data_local_dir)
