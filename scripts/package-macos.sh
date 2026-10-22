@@ -31,7 +31,7 @@ echo "==> Building release ($VERSION)"
 # matches Cargo.toml (a local run with no $VERSION override).
 sed -i.bak -E "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml && rm -f Cargo.toml.bak
 rustup target add aarch64-apple-darwin >/dev/null 2>&1 || true
-cargo build --release --target aarch64-apple-darwin
+cargo build --release --locked --bin GlyphClub --bin glyphclub-cli --target aarch64-apple-darwin
 
 echo "==> Assembling $APP_NAME.app"
 rm -rf "$STAGE_DIR"
@@ -59,6 +59,12 @@ if [ -d "$SDK/illustratorapi" ]; then
 else
   echo "==> WARNING: no Illustrator SDK at $SDK, packaging without the Illustrator plug-in"
 fi
+
+# Fail before signing if the application metadata or branding is incomplete.
+plutil -lint "$APP_BUNDLE/Contents/Info.plist"
+test -s "$APP_BUNDLE/Contents/MacOS/GlyphClub"
+test -s "$APP_BUNDLE/Contents/Resources/GlyphClub.icns"
+test -d "$APP_BUNDLE/Contents/Resources/icon-fonts/bootstrap-icons"
 
 echo "==> Code signing with: $SIGN_IDENTITY"
 codesign --force --deep --options runtime --timestamp \
@@ -105,5 +111,7 @@ fi
 
 echo "==> Stapling"
 xcrun stapler staple "$DMG_PATH"
+xcrun stapler validate "$DMG_PATH"
+spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG_PATH"
 
 echo "==> Done: $DMG_PATH"

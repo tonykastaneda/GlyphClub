@@ -22,7 +22,8 @@ Write-Host "==> Building release ($Version)"
 # sync with the tag actually being built. No-op when $Version already
 # matches Cargo.toml (a local run with no $env:VERSION override).
 (Get-Content Cargo.toml) -replace '^version = ".*"', "version = `"$Version`"" | Set-Content Cargo.toml
-cargo build --release
+cargo build --release --locked --bin GlyphClub --bin glyphclub-cli
+if ($LASTEXITCODE -ne 0) { throw "Release build failed" }
 
 $StageDir = "target/package/windows"
 # Deliberately not version-suffixed — the docs site's download button links

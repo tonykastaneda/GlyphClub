@@ -258,18 +258,24 @@ impl GlyphClub {
                 .items_center()
                 .gap(px(4.))
                 .rounded(px(6.))
+                .when(self.nav == Nav::AllIcons, |d| d.bg(pal.nav_active))
                 .hover(|s| s.bg(pal.hover))
                 .child(
-                    Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight })
+                    div().id("icon-fonts-toggle").w(px(18.)).h_full().flex().items_center().justify_center()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.icons_open = !this.icons_open;
+                        cx.notify();
+                    }))
+                    .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight })
                         .size(px(12.))
-                        .text_color(pal.text_dim),
+                        .text_color(pal.text_dim)),
                 )
                 .child(Icon::new(IconName::Shapes).size(px(16.)).text_color(pal.text))
                 .child(div().flex_1().pl(px(4.)).text_size(px(13.)).text_color(pal.text).child("Icon Fonts"))
                 .when(total > 0, |d| d.child(div().text_size(px(11.)).text_color(pal.text_dim).child(total.to_string())))
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.icons_open = !this.icons_open;
-                    cx.notify();
+                    this.set_nav(Nav::AllIcons, cx);
                 })),
         );
         if open {

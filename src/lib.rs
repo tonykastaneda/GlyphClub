@@ -1,7 +1,5 @@
-//! GlyphClub's core — catalog, scanning, activation, font parsing and the
-//! OS integrations — with no UI in it. The gpui front end (`src/next`)
-//! builds on this; the original hand-drawn front end (`src/main.rs`) still
-//! declares these modules itself until it's retired.
+//! GlyphClub’s shared core: catalog, scanning, activation, fonts and OS integrations.
+//! The main GPUI application in `src/next` and the CLI both build on this.
 
 pub mod activate;
 pub mod added;

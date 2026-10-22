@@ -12,8 +12,7 @@ GlyphClub activates and deactivates fonts from whatever folder your team
 already syncs — Dropbox, Google Drive, iCloud, OneDrive, SMB, anything.
 There's no OAuth, no cloud account, and no web app pretending to be a
 desktop app: it's a native macOS/Windows application that just watches and
-reads plain folders, built from scratch on `winit` + `wgpu` + `vello` +
-`parley` with no widget toolkit underneath it.
+reads plain folders, with a native GPUI interface.
 
 ## Features
 
@@ -70,14 +69,13 @@ and the optional `ILLUSTRATOR_SDK_TOKEN` secret in the release workflow).
 ## Building and running
 
 ```sh
-cargo run
+cargo run --release
 ```
 
 Requires a recent stable Rust toolchain. Builds natively on macOS and
-Windows; the `[[bin]]` is named `GlyphClub` specifically so the built
-executable's own filename is what macOS's menu bar falls back to for the
-bold application-menu title (there's no `.app` bundle/`Info.plist` yet to
-pull a display name from otherwise).
+Windows. `GlyphClub` is the main GPUI application; `glyphclub-cli` manages
+fonts and controls the running app. Packaged releases include the branding
+icon and all bundled icon sets with their licenses.
 
 ## Releasing
 
@@ -112,12 +110,10 @@ that profile name, which the script uses by default.
 
 ## Project layout
 
-- `src/` — the application itself: `app.rs` holds shared state, `ui/` is
-  the immediate-mode rendering + hit-testing for every screen, `catalog.rs`/
-  `scan.rs`/`store.rs` own the SQLite-backed font catalog and folder
-  watching, and `activate.rs` does the actual OS-level font
-  activation/deactivation. `illustrator_bridge.rs` and `integrations.rs`
-  are the app's side of the Illustrator plug-in.
+- `src/next/` — the main GPUI application, views, settings and Illustrator bridge.
+- `src/lib.rs` and the shared modules in `src/` — catalog, scanning,
+  activation and font metadata. `src/cli/` contains the command-line tool.
+- `vendor/` — the GPUI patch supporting direct vector artwork dragging.
 - `plugin/` — the Illustrator plug-in (C++/Objective-C++, built with `make`).
 - `branding/` — the source SVGs/icon assets this README and the app's own
   UI (format badges, dock icon, wordmark) are drawn from.

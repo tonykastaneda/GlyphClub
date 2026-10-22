@@ -191,6 +191,61 @@ pub fn icon_svg(font_data: &[u8], codepoint: u32, height: f32) -> Option<String>
     ))
 }
 
+/// A single-page vector PDF, suitable for native artwork clipboard exchange.
+pub fn icon_pdf(font_data: &[u8], codepoint: u32, height: f32) -> Option<Vec<u8>> {
+    if !height.is_finite() || height <= 0. { return None; }
+    let face = Face::parse(font_data, 0).ok()?;
+    let gid = face.glyph_index(char::from_u32(codepoint)?)?;
+    let mut path = PdfPath::default();
+    let b = face.outline_glyph(gid, &mut path)?;
+    let scale = height / face.units_per_em() as f32;
+    let w = (b.x_max as f32 - b.x_min as f32) * scale;
+    let h = (b.y_max as f32 - b.y_min as f32) * scale;
+    if w <= 0. || h <= 0. { return None; }
+    let stream = format!("q\n{scale} 0 0 {scale} {} {} cm\n{}f\nQ\n",
+        -(b.x_min as f32) * scale, -(b.y_min as f32) * scale, path.data);
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Resources << >> /Contents 4 0 R >>"),
+        format!("<< /Length {} >>\nstream\n{}endstream", stream.len(), stream),
+    ];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = vec![0];
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+    for offset in &offsets[1..] {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    Some(pdf)
+}
+
+#[derive(Default)]
+struct PdfPath { data: String, current: (f32, f32), start: (f32, f32) }
+impl OutlineBuilder for PdfPath {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.data.push_str(&format!("{x} {y} m\n"));
+        self.current = (x, y); self.start = (x, y);
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.data.push_str(&format!("{x} {y} l\n")); self.current = (x, y);
+    }
+    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        let (px, py) = self.current;
+        self.curve_to(px + (x1-px)*2./3., py + (y1-py)*2./3.,
+            x + (x1-x)*2./3., y + (y1-y)*2./3., x, y);
+    }
+    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+        self.data.push_str(&format!("{x1} {y1} {x2} {y2} {x} {y} c\n")); self.current = (x, y);
+    }
+    fn close(&mut self) { self.data.push_str("h\n"); self.current = self.start; }
+}
+
 #[derive(Default)]
 struct SvgPath(String);
 
@@ -224,6 +279,35 @@ mod tests {
         for s in bundled {
             assert!(!s.icons.is_empty(), "{} has no icons", s.name);
             assert!(!s.family.is_empty(), "{} has no family name", s.name);
+        }
+    }
+
+    #[test]
+    fn pdf_quadratics_use_equivalent_cubic_controls() {
+        let mut path = PdfPath::default();
+        path.move_to(0., 0.);
+        path.quad_to(3., 6., 6., 0.);
+        assert!(path.data.contains("2 4 4 4 6 0 c"));
+    }
+
+    #[test]
+    fn every_set_exports_vector_pdf_with_valid_offsets() {
+        let sets = load_sets();
+        assert!(!sets.is_empty());
+        for set in sets {
+            let data = std::fs::read(&set.font_path).unwrap();
+            let pdf = icon_pdf(&data, set.icons[0].codepoint, 64.).expect(&set.name);
+            let text = std::str::from_utf8(&pdf).unwrap();
+            let xref: usize = text.split("startxref\n").nth(1).unwrap().lines().next().unwrap().parse().unwrap();
+            assert!(text[xref..].starts_with("xref\n"));
+            for (i, row) in text[xref..].lines().skip(3).take(4).enumerate() {
+                let offset: usize = row.split_whitespace().next().unwrap().parse().unwrap();
+                assert!(text[offset..].starts_with(&format!("{} 0 obj", i+1)));
+            }
+            let length: usize = text.split("/Length ").nth(1).unwrap().split_whitespace().next().unwrap().parse().unwrap();
+            let start = text.find("stream\n").unwrap() + 7;
+            assert!(text[start+length..].starts_with("endstream"));
+            assert!(text[start..start+length].contains("f\n"));
         }
     }
 

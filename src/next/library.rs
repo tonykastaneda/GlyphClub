@@ -24,6 +24,7 @@ pub enum Nav {
     Tag(i64),
     /// An icon set, by index into `GlyphClub::icon_sets`.
     Icons(usize),
+    AllIcons,
 }
 
 /// One face (one entry in a font file).
@@ -229,7 +230,7 @@ impl Library {
                 Nav::Starred => self.family_starred(f),
                 Nav::Recents => !f.is_system && f.newest_added >= recent_cutoff,
                 Nav::Folder(id) => f.folder_id == id,
-                Nav::Icons(_) => false,
+                Nav::Icons(_) | Nav::AllIcons => false,
                 Nav::Tag(tag) => f
                     .ids()
                     .any(|id| self.font_tags.get(&id).is_some_and(|t| t.contains(&tag))),

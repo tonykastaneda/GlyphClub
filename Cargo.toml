@@ -1,22 +1,12 @@
 [package]
 name = "glyphclub"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
+default-run = "GlyphClub"
 
-# Capitalized (unlike `[package].name`, which crates.io convention keeps
-# lowercase) because this is also the actual built executable's filename —
-# with no `Info.plist`/`.app` bundle to pull a display name from instead,
-# macOS's menu bar falls back to that literal filename for the bold app
-# menu title, so this is what makes it read "GlyphClub" there instead of
-# "glyphclub".
+# The GPUI application is the standard executable on both platforms.
 [[bin]]
 name = "GlyphClub"
-path = "src/main.rs"
-
-# The gpui front end replacing the hand-drawn one above. Built on the
-# UI-free core in src/lib.rs.
-[[bin]]
-name = "GlyphClubNext"
 path = "src/next/main.rs"
 
 # glyphclub-cli: libraries, fonts and activation from the terminal, and
@@ -81,7 +71,7 @@ tray-icon = { version = "0.24", default-features = false }
 # branding PNG.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSButton", "NSView", "NSApplication", "NSImage", "NSRunningApplication", "NSResponder"] }
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSButton", "NSView", "NSApplication", "NSImage", "NSRunningApplication", "NSResponder", "NSPasteboard", "NSPasteboardItem"] }
 objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSData", "NSUserDefaults", "NSString", "NSURL", "NSDate", "NSError"] }
 # The menu bar icon (see `tray.rs`) — same crate as Windows' system tray.
 tray-icon = { version = "0.24", default-features = false }
@@ -100,3 +90,7 @@ winres = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
+
+[patch.crates-io]
+gpui-pre = { path = "vendor/gpui-pre-0.3.9" }
+gpui-pre-macos = { path = "vendor/gpui-pre-macos-0.3.9" }

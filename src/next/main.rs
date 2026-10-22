@@ -1,6 +1,5 @@
-//! GlyphClub's gpui front end. Replaces the hand-drawn winit/vello UI in
-//! `src/main.rs`; the catalog, scanning, activation and OS integrations
-//! underneath are the shared core in `src/lib.rs`.
+//! GlyphClub's main GPUI application. The catalog, scanning, activation
+//! and OS integrations are the shared core in `src/lib.rs`.
 
 mod actions;
 mod app;
@@ -103,6 +102,19 @@ fn show_main_window(cx: &mut App) {
     }
 }
 
+/// Keep the branding icon for both bundled releases and bare development builds.
+#[cfg(target_os = "macos")]
+fn set_app_icon() {
+    use objc2::{AnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+    let Some(mtm) = MainThreadMarker::new() else { return; };
+    let data = NSData::with_bytes(include_bytes!("../../branding/glyphicon-macOS-Default-1024@1x.png"));
+    if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
+        unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&image)); }
+    }
+}
+
 fn main() {
     // A second launch just brings the running one forward.
     if bridge::show_running_instance() {
@@ -129,6 +141,8 @@ fn main() {
     application.on_reopen(show_main_window);
     application.run(move |cx| {
         gpui_kit::init(cx);
+        #[cfg(target_os = "macos")]
+        set_app_icon();
         cx.set_global(AppSettings(settings));
         settings_window::set_apply_hook(apply_settings_change, cx);
         actions::bind_keys(cx);

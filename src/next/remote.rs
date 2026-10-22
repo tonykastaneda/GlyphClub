@@ -50,6 +50,7 @@ impl GlyphClub {
                             .ok_or_else(|| format!("no library “{name}”"))?;
                         Nav::Folder(f.id)
                     }
+                    "icons" if args.len() == 1 => Nav::AllIcons,
                     "icons" => {
                         let name = args[1..].join(" ").to_lowercase();
                         let i = self
@@ -264,6 +265,7 @@ impl GlyphClub {
             Nav::Recents => json!("recents"),
             Nav::Folder(id) => json!({ "library": self.lib.folders.iter().find(|f| f.id == id).map(|f| f.name.to_string()) }),
             Nav::Tag(id) => json!({ "tag": self.lib.tag_name(id) }),
+            Nav::AllIcons => json!({ "icons": "all" }),
             Nav::Icons(i) => json!({ "icons": self.icon_sets.get(i).map(|s| s.name.clone()) }),
         };
         let selected: Vec<String> = self.selection().iter().map(|&i| self.lib.families[i].name.to_string()).collect();
