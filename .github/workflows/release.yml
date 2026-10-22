@@ -91,23 +91,9 @@ jobs:
           APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
         run: echo "$APPLE_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/notary_key.p8"
 
-      # Optional: the Illustrator plug-in needs Adobe's SDK, which can't be
-      # committed here. With the ILLUSTRATOR_SDK_TOKEN secret (a token that
-      # can read tonykastaneda/AA-ReColor-fork's releases), it's downloaded
-      # from that repo's "sdk-illustrator-2026" release; without it the DMG
-      # uses the prebuilt plug-in in plugin/prebuilt (scripts/update-prebuilt-plugin.sh).
-      - name: Download Illustrator SDK
-        env:
-          GH_TOKEN: ${{ secrets.ILLUSTRATOR_SDK_TOKEN }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "No ILLUSTRATOR_SDK_TOKEN secret; packaging uses the prebuilt plug-in in plugin/prebuilt"
-            exit 0
-          fi
-          gh release download sdk-illustrator-2026 --repo tonykastaneda/AA-ReColor-fork --pattern AdobeIllustratorSDK.zip --dir "$RUNNER_TEMP"
-          unzip -q "$RUNNER_TEMP/AdobeIllustratorSDK.zip" -d "$RUNNER_TEMP/sdk"
-          echo "SDK=$RUNNER_TEMP/sdk/AdobeIllustratorSDK" >> "$GITHUB_ENV"
-
+      # The macOS Illustrator plug-in is built on the Mac that has Adobe's
+      # SDK and committed as plugin/prebuilt (scripts/update-prebuilt-plugin.sh);
+      # package-macos.sh checks it matches plugin/ and signs it.
       - name: Build, sign, notarize, package
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -143,8 +129,9 @@ jobs:
           fi
 
       # The Illustrator plug-in needs Adobe's SDK, which can't be committed
-      # here. An encrypted copy is in tonykastaneda/Slippy's public
-      # "sdk-illustrator-2026" release; the SDK_KEY secret decrypts it.
+      # here (Adobe's license doesn't allow a plain public copy). An
+      # encrypted copy is in this repo's own "sdk-illustrator-2026"
+      # pre-release; the SDK_KEY secret decrypts it.
       - name: Download Illustrator SDK
         shell: bash
         env:
@@ -155,7 +142,7 @@ jobs:
             echo "::warning::No SDK_KEY secret; the Windows zip won't include the Illustrator plug-in"
             exit 0
           fi
-          gh release download sdk-illustrator-2026 --repo tonykastaneda/Slippy --pattern AdobeIllustratorSDK.zip.enc --dir "$RUNNER_TEMP"
+          gh release download sdk-illustrator-2026 --repo "$GITHUB_REPOSITORY" --pattern AdobeIllustratorSDK.zip.enc --dir "$RUNNER_TEMP"
           printf '%s' "$SDK_KEY" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$RUNNER_TEMP/AdobeIllustratorSDK.zip.enc" -out "$RUNNER_TEMP/AdobeIllustratorSDK.zip" -pass stdin
           7z x -y -bd -o"$RUNNER_TEMP/sdk" "$RUNNER_TEMP/AdobeIllustratorSDK.zip" > /dev/null
           echo "AI_SDK=$RUNNER_TEMP/sdk/AdobeIllustratorSDK" >> "$GITHUB_ENV"

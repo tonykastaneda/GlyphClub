@@ -38,7 +38,7 @@ jobs:
             echo "::error::No SDK_KEY secret, so no Illustrator plug-in"
             exit 1
           fi
-          gh release download sdk-illustrator-2026 --repo tonykastaneda/Slippy --pattern AdobeIllustratorSDK.zip.enc --dir "$RUNNER_TEMP"
+          gh release download sdk-illustrator-2026 --repo "$GITHUB_REPOSITORY" --pattern AdobeIllustratorSDK.zip.enc --dir "$RUNNER_TEMP"
           printf '%s' "$SDK_KEY" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$RUNNER_TEMP/AdobeIllustratorSDK.zip.enc" -out "$RUNNER_TEMP/AdobeIllustratorSDK.zip" -pass stdin
           7z x -y -bd -o"$RUNNER_TEMP/sdk" "$RUNNER_TEMP/AdobeIllustratorSDK.zip" > /dev/null
           echo "AI_SDK=$RUNNER_TEMP/sdk/AdobeIllustratorSDK" >> "$GITHUB_ENV"
