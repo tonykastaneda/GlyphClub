@@ -457,6 +457,7 @@ impl GlyphClub {
 
     pub fn update_banner(&self, pal: &Palette, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let version = self.update_available.clone().filter(|_| !self.dismissed_update)?;
+        let version_for_skip = version.clone();
         Some(
             div()
                 .mx(px(14.))
@@ -477,7 +478,20 @@ impl GlyphClub {
                         .text_color(pal.select)
                         .cursor_pointer()
                         .child("Download")
-                        .on_click(|_, _, cx| cx.open_url(update::RELEASES_URL)),
+                        .on_click(|_, _, cx| cx.open_url(update::WEBSITE_URL)),
+                )
+                .child(
+                    div()
+                        .id("update-skip")
+                        .text_color(pal.text_dim)
+                        .cursor_pointer()
+                        .child("Skip This Version")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let skipped = update::parse_version(&version_for_skip);
+                            this.update_settings(cx, |s| s.skipped_version = skipped);
+                            this.dismissed_update = true;
+                            cx.notify();
+                        })),
                 )
                 .child(
                     div()

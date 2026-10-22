@@ -1,7 +1,8 @@
 //! The GitHub releases check: on launch (quietly) and from GlyphClub ▸
 //! Check for Updates…
 
-pub const RELEASES_URL: &str = "https://github.com/tonykastaneda/GlyphClub/releases/latest";
+/// The update banner's Download button sends people here.
+pub const WEBSITE_URL: &str = "https://tonykastaneda.github.io/GlyphClub/";
 pub const REPO_URL: &str = "https://github.com/tonykastaneda/GlyphClub";
 
 pub enum UpdateCheck {
@@ -37,7 +38,7 @@ fn fetch_latest_release_version() -> Option<String> {
     Some(tag.trim_start_matches('v').to_string())
 }
 
-fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
+pub fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
     let mut parts = s.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next()?.parse().ok()?;

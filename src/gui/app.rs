@@ -202,6 +202,10 @@ impl GlyphClub {
             let result = cx.background_executor().spawn(async { update::check() }).await;
             if let UpdateCheck::Available(v) = result {
                 let _ = this.update(cx, |this, cx| {
+                    let skipped = cx.global::<AppSettings>().0.skipped_version;
+                    if skipped.is_some() && skipped == update::parse_version(&v) {
+                        return;
+                    }
                     this.update_available = Some(v);
                     cx.notify();
                 });

@@ -96,6 +96,9 @@ pub struct Settings {
     pub silent_mode: bool,
     pub deactivate_auto_on_quit: bool,
     pub deactivate_manual_on_quit: bool,
+    /// The update banner's Skip This Version: the launch check stays quiet
+    /// about this version (major, minor, patch) but not about newer ones.
+    pub skipped_version: Option<(u32, u32, u32)>,
 }
 
 impl Default for Settings {
@@ -125,6 +128,7 @@ impl Default for Settings {
             silent_mode: false,
             deactivate_auto_on_quit: true,
             deactivate_manual_on_quit: false,
+            skipped_version: None,
         }
     }
 }
