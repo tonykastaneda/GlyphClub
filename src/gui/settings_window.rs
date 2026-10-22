@@ -212,7 +212,14 @@ impl SettingsView {
                         s.launch_on_startup = v
                     }))
                     .child(Self::check("background", "Run GlyphClub in background", s.menu_bar, |s, v| s.menu_bar = v))
-                    .child(Self::note("Keep the app icon in the menu bar when the GlyphClub window is closed.", pal)),
+                    .child(Self::note(
+                        if cfg!(windows) {
+                            "Keep the app icon in the system tray when the GlyphClub window is closed."
+                        } else {
+                            "Keep the app icon in the menu bar when the GlyphClub window is closed."
+                        },
+                        pal,
+                    )),
                 pal,
             ))
             .child(Self::divider(pal))
