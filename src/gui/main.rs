@@ -100,7 +100,48 @@ fn apply_settings_change(before: &Settings, after: &Settings, cx: &mut App) {
 fn show_main_window(cx: &mut App) {
     cx.activate(true);
     if let Some(handle) = cx.try_global::<MainWindow>().map(|m| m.0) {
-        let _ = handle.update(cx, |_, window, _| window.activate_window());
+        let _ = handle.update(cx, |_, window, _| {
+            #[cfg(windows)]
+            set_window_shown(window, true);
+            window.activate_window()
+        });
+    }
+}
+
+/// Whether GlyphClub lives in the menu bar / system tray right now (the
+/// setting is on and the icon is really there), so putting it away there
+/// doesn't leave it unreachable.
+fn in_tray(cx: &App) -> bool {
+    cx.global::<AppSettings>().0.menu_bar && cx.try_global::<TrayIcon>().is_some_and(|t| t.0.is_some())
+}
+
+/// Puts GlyphClub away in the menu bar / system tray, still running:
+/// macOS hides the app; Windows hides the main window (gpui's app-level
+/// hide does nothing there).
+fn hide_to_tray(window: &mut Window, cx: &mut App) {
+    #[cfg(windows)]
+    {
+        let _ = cx;
+        set_window_shown(window, false);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        cx.hide();
+    }
+}
+
+#[cfg(windows)]
+fn set_window_shown(window: &Window, shown: bool) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOW};
+    let Ok(handle) = HasWindowHandle::window_handle(window) else { return };
+    if let RawWindowHandle::Win32(win32) = handle.as_raw() {
+        let hwnd = HWND(win32.hwnd.get() as *mut core::ffi::c_void);
+        unsafe {
+            let _ = ShowWindow(hwnd, if shown { SW_SHOW } else { SW_HIDE });
+        }
     }
 }
 
@@ -154,7 +195,20 @@ fn main() {
         settings_window::set_apply_hook(apply_settings_change, cx);
         actions::bind_keys(cx);
 
-        cx.on_action(|_: &Quit, cx| cx.quit());
+        // Cmd-Q (File ▸ Exit on Windows) puts GlyphClub away in the menu
+        // bar / tray while it lives there; the icon's own Quit really quits.
+        cx.on_action(|_: &Quit, cx| {
+            if !in_tray(cx) {
+                return cx.quit();
+            }
+            // Deferred: Quit arrives while the window is still handling the
+            // key press, when it can't be updated yet.
+            cx.defer(|cx| {
+                if let Some(handle) = cx.try_global::<MainWindow>().map(|m| m.0) {
+                    let _ = handle.update(cx, |_, window, cx| hide_to_tray(window, cx));
+                }
+            });
+        });
         cx.on_action(|_: &HideApp, cx| cx.hide());
         cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
         cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
@@ -209,9 +263,9 @@ fn main() {
         // Closing the window quits, unless GlyphClub lives in the menu bar,
         // where it just hides.
         let _ = window.update(cx, |_, window, cx| {
-            window.on_window_should_close(cx, |_, cx| {
-                if cx.global::<AppSettings>().0.menu_bar {
-                    cx.hide();
+            window.on_window_should_close(cx, |window, cx| {
+                if in_tray(cx) {
+                    hide_to_tray(window, cx);
                     false
                 } else {
                     true

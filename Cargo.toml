@@ -46,6 +46,9 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 windows = { version = "0.62", features = ["Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 # The system tray icon (see `tray.rs`).
 tray-icon = { version = "0.24", default-features = false }
+# The main window's HWND, to hide it to the tray and show it again
+# (gpui's app-level hide does nothing on Windows).
+raw-window-handle = "0.6"
 
 # AppKit/Foundation for the dock icon, the icon drag pasteboard and reading
 # a file's Date Added.
