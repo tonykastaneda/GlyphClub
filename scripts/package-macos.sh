@@ -89,6 +89,28 @@ else
   echo "==> WARNING: no Photoshop SDK at $PS_SDK, packaging without the Photoshop plug-in"
 fi
 
+# The InDesign plug-in (plugin-indesign/), built here from Adobe's InDesign
+# SDK (default ~/Developer/AdobeInDesignSDK). It needs the SDK's macOS
+# libraries, which aren't in CI's trimmed copy, so it's built on the Mac
+# that has the full SDK and committed as plugin-indesign/prebuilt.
+ID_SDK="${ID_SDK:-$HOME/Developer/AdobeInDesignSDK}"
+if [ -d "$ID_SDK/build/mac" ]; then
+  echo "==> Building the InDesign plug-in"
+  make -C plugin-indesign clean
+  make -C plugin-indesign ID_SDK="$ID_SDK" SIGN_ID="$SIGN_IDENTITY"
+  ditto plugin-indesign/build/GlyphClub.InDesignPlugin "$APP_BUNDLE/Contents/Resources/GlyphClub InDesign.InDesignPlugin"
+elif [ -d plugin-indesign/prebuilt/GlyphClub.InDesignPlugin ]; then
+  if [ "$(scripts/plugin-source-hash.sh indesign)" != "$(cat plugin-indesign/prebuilt/SOURCE_HASH)" ]; then
+    echo "ERROR: plugin-indesign/prebuilt is out of date with plugin-indesign/; run scripts/update-prebuilt-plugin.sh indesign" >&2
+    exit 1
+  fi
+  echo "==> Using the prebuilt InDesign plug-in"
+  ditto plugin-indesign/prebuilt/GlyphClub.InDesignPlugin "$APP_BUNDLE/Contents/Resources/GlyphClub InDesign.InDesignPlugin"
+  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Resources/GlyphClub InDesign.InDesignPlugin"
+else
+  echo "==> WARNING: no InDesign SDK at $ID_SDK and no prebuilt InDesign plug-in, packaging without it"
+fi
+
 plutil -lint "$APP_BUNDLE/Contents/Info.plist"
 test -s "$APP_BUNDLE/Contents/MacOS/GlyphClub"
 test -s "$APP_BUNDLE/Contents/Resources/GlyphClub.icns"

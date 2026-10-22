@@ -210,9 +210,13 @@ mod mac {
         dev.is_dir().then_some(dev)
     }
 
-    /// `CFBundleShortVersionString` from a plug-in bundle's Info.plist.
+    /// `CFBundleShortVersionString` from a plug-in bundle's Info.plist
+    /// (Contents/Info.plist; InDesign's framework-style bundles keep it in
+    /// Versions/A/Resources).
     pub fn plugin_version(bundle: &Path) -> Option<String> {
-        let plist = std::fs::read_to_string(bundle.join("Contents").join("Info.plist")).ok()?;
+        let plist = [bundle.join("Contents").join("Info.plist"), bundle.join("Versions/A/Resources/Info.plist")]
+            .iter()
+            .find_map(|p| std::fs::read_to_string(p).ok())?;
         let key = plist.find("<key>CFBundleShortVersionString</key>")?;
         let rest = &plist[key..];
         let start = rest.find("<string>")? + "<string>".len();

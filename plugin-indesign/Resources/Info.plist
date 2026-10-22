@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>GlyphClub</string>
+	<key>CFBundleGetInfoString</key>
+	<string>GlyphClub for InDesign __VERSION__</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.tonykastaneda.glyphclub.indesign</string>
+	<key>CFBundlePackageType</key>
+	<string>InD3</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleSignature</key>
+	<string>InDn</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>GlyphClub for InDesign</string>
+</dict>
+</plist>

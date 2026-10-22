@@ -34,6 +34,11 @@ if [ -d "$PS_SDK/photoshop" ]; then
   make -s -C plugin-photoshop PS_SDK="$PS_SDK" >/dev/null
   ditto plugin-photoshop/build/GlyphClub.plugin "$STAGE/Contents/Resources/GlyphClub Photoshop.plugin"
 fi
+ID_SDK="${ID_SDK:-$HOME/Developer/AdobeInDesignSDK}"
+if [ -d "$ID_SDK/source/public" ]; then
+  make -s -C plugin-indesign ID_SDK="$ID_SDK" >/dev/null
+  ditto plugin-indesign/build/GlyphClub.InDesignPlugin "$STAGE/Contents/Resources/GlyphClub InDesign.InDesignPlugin"
+fi
 codesign --force --deep --sign - "$STAGE"
 
 echo "==> Installing to /Applications"

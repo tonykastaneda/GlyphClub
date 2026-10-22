@@ -12,3 +12,7 @@
 # Photoshop plug-in builds
 /plugin-photoshop/build
 /plugin-photoshop/build-win-*
+
+# InDesign plug-in builds
+/plugin-indesign/build
+/plugin-indesign/build-win-*

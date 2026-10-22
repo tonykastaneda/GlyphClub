@@ -1,0 +1,50 @@
+//========================================================================================
+// GlyphClub for InDesign: resources (compiled by the SDK's ODFRC).
+//========================================================================================
+#include "objectmodeltypes.fh"
+#include "BuildNumber.h"
+#include "PMLocaleIds.h"
+#include "ShuksanID.h"
+#include "PlugInModel_UIAttributes.h"
+#include "DocumentID.h" // kAfterOpenDocSignalRespServiceImpl
+#include "GCID.h"
+
+#ifdef __ODFRC__
+
+resource PluginVersion (kSDKDefPluginVersionResourceID)
+{
+	kTargetVersion,
+	kGCPluginID,
+	kSDKDefPlugInMajorVersionNumber, kSDKDefPlugInMinorVersionNumber,
+	kSDKDefHostMajorVersionNumber, kSDKDefHostMinorVersionNumber,
+	kGCCurrentMajorFormatNumber, kGCCurrentMinorFormatNumber,
+	{ kInDesignProduct, kInCopyProduct },
+	{ kWildFS },
+	kModelPlugIn,
+	kGCVersion
+};
+
+resource ClassDescriptionTable(kSDKDefClassDescriptionTableResourceID)
+{{{
+	/** After a document opens, asks GlyphClub for its missing fonts. The
+		service provider is InDesign's own for the after-open signal. */
+	Class
+	{
+		kGCMissingFontResponderBoss,
+		kInvalidClass,
+		{
+			IID_IK2SERVICEPROVIDER, kAfterOpenDocSignalRespServiceImpl,
+			IID_IRESPONDER, kGCMissingFontResponderImpl,
+		}
+	},
+}}};
+
+resource FactoryList (kSDKDefFactoryListResourceID)
+{
+	kImplementationIDSpace,
+	{
+		#include "GCFactoryList.h"
+	}
+};
+
+#endif // __ODFRC__
