@@ -158,5 +158,6 @@ jobs:
           files: |
             artifacts/macos-dmg/*.dmg
             artifacts/windows-zip/*.zip
-          draft: true
+          draft: false
+          make_latest: true
           generate_release_notes: true

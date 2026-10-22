@@ -87,7 +87,7 @@ icon and all bundled icon sets with their licenses.
 Pushing a tag like `v0.1.0` runs `.github/workflows/release.yml`, which
 builds, signs, and notarizes a macOS DMG (Apple Silicon only) and builds a
 Windows zip (unsigned — no code-signing cert yet, so SmartScreen will warn
-on first run until one's added), then opens a draft GitHub Release with
+on first run until one's added), then publishes a GitHub Release (marked Latest) with
 both attached. `scripts/package-macos.sh`/`scripts/package-windows.ps1` are
 the actual build/package logic; the workflow is mostly just credentials
 plumbing around them, and `package-macos.sh` also works standalone for a
