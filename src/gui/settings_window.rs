@@ -524,6 +524,7 @@ impl Render for SettingsView {
                 // preferences window. Empty space drags the window.
                 div()
                     .id("settings-titlebar")
+                    .relative()
                     .flex_shrink_0()
                     .pt(px(8.))
                     .pb(px(8.))
@@ -544,7 +545,12 @@ impl Render for SettingsView {
                             .child(tab("tab-sidebar", IconName::PanelLeft, Page::Sidebar, cx))
                             .child(tab("tab-import", IconName::Download, Page::Import, cx))
                             .child(tab("tab-auto", IconName::Loader, Page::AutoActivation, cx)),
-                    ),
+                    )
+                    // Windows: the close button the hidden system title bar
+                    // would have had (this window can't minimize or resize).
+                    .when(cfg!(target_os = "windows"), |d| {
+                        d.child(div().absolute().top_0().right_0().child(crate::chrome::window_controls(window, &pal, false)))
+                    }),
             )
             .child(div().id("settings-body").flex_1().overflow_y_scroll().child(body))
     }

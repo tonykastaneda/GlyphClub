@@ -1427,7 +1427,14 @@ impl Render for GlyphClub {
             )
             .when(self.info_open, |d| d.child(self.render_detail(&pal, window, cx)));
 
-        let root: Div = div().size_full().child(root);
+        // Windows: our own title bar strip above everything (menus and the
+        // window buttons); macOS keeps its traffic lights and global menu.
+        let root: Div = div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .when(cfg!(target_os = "windows"), |d| d.child(self.windows_titlebar(&pal, window)))
+            .child(div().flex_1().min_h_0().child(root));
         self.register_actions(root, cx)
     }
 }

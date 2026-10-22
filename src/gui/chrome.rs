@@ -334,7 +334,7 @@ impl GlyphClub {
             .gap(px(8.))
             .px(px(14.))
             // Leaves room for the traffic lights when the sidebar is hidden.
-            .when(!self.sidebar_shown, |d| d.pl(px(84.)))
+            .when(!self.sidebar_shown && cfg!(target_os = "macos"), |d| d.pl(px(84.)))
             .on_mouse_down(MouseButton::Left, |ev, window, _| drag_or_zoom(ev, window))
             .when(!self.sidebar_shown, |d| {
                 d.child(icon_button("show-sidebar", IconName::PanelLeft, pal, |_, window, cx| {
@@ -350,14 +350,7 @@ impl GlyphClub {
                     .child(div().flex_1().child(Slider::new(&self.size_slider).bg(pal.select).text_color(gpui_kit::white())))
                     .child(div().text_size(px(14.)).text_color(pal.text_dim).child("A")),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .when_some(self.app_menu_bar.clone().filter(|_| !self.compact), |d, bar| {
-                        d.child(div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(bar))
-                    }),
-            )
+            .child(div().flex_1().min_w_0())
             .when(self.compact, |d| d.child(self.overflow_menu(pal, cx)))
             .when(!self.compact, |d| d.child(
                 round("tb-sample", IconName::TextCursorInput, s.show_sample_bar, pal)
@@ -391,8 +384,7 @@ impl GlyphClub {
             )
     }
 
-    /// The » button a narrow window shows in place of the toolbar buttons
-    /// (and, on Windows, the in-app menu bar).
+    /// The » button a narrow window shows in place of the toolbar buttons.
     fn overflow_menu(&self, pal: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::actions::*;
         use gpui_kit::component::button::{Button, ButtonVariants};
@@ -411,50 +403,75 @@ impl GlyphClub {
                     .small()
                     .dropdown_menu(move |menu, window, cx| {
                         let view_mode = s.view_mode;
-                        let mut menu = menu
+                        menu
                             .item(fire("Edit Preview", || Box::new(EditPreviewText)))
                             .submenu("View", window, cx, move |m, _, _| {
                                 m.item(fire("as Grid", || Box::new(ViewGrid)).checked(view_mode == ViewMode::Grid))
                                     .item(fire("as List", || Box::new(ViewList)).checked(view_mode == ViewMode::List))
                             })
-                            .item(fire("Info Pane", || Box::new(ToggleInfo)).checked(info_open));
-                        if !cfg!(target_os = "macos") {
-                            // Windows has no global menu bar to fall back on.
-                            menu = menu
-                                .separator()
-                                .submenu("File", window, cx, |m, _, _| {
-                                    m.item(fire("Add Library…", || Box::new(AddLibrary)))
-                                        .item(fire("Sync Now", || Box::new(SyncNow)))
-                                        .item(fire("Export User Fonts…", || Box::new(ExportUserFonts)))
-                                        .separator()
-                                        .item(fire("Settings…", || Box::new(OpenSettings)))
-                                        .item(fire("Quit", || Box::new(Quit)))
-                                })
-                                .submenu("Font", window, cx, |m, _, _| {
-                                    m.item(fire("Activate", || Box::new(Activate)))
-                                        .item(fire("Activate Temporarily", || Box::new(ActivateTemporarily)))
-                                        .item(fire("Deactivate", || Box::new(Deactivate)))
-                                        .separator()
-                                        .item(fire("Star / Unstar", || Box::new(ToggleStar)))
-                                        .item(fire("Copy Font Name", || Box::new(CopyFontName)))
-                                        .item(fire("Export…", || Box::new(ExportSelected)))
-                                        .item(fire("Show in Finder", || Box::new(RevealSelected)))
-                                        .separator()
-                                        .item(fire("Remove from Fontlist", || Box::new(RemoveFromFontlist)))
-                                        .item(fire("Delete from Library…", || Box::new(DeleteSelected)))
-                                })
-                                .submenu("Help", window, cx, |m, _, _| {
-                                    m.item(fire("About GlyphClub", || Box::new(About)))
-                                        .item(fire("Check for Updates…", || Box::new(CheckForUpdates)))
-                                        .item(fire("GlyphClub on GitHub", || Box::new(OpenGitHub)))
-                                });
-                        }
-                        menu
+                            .item(fire("Info Pane", || Box::new(ToggleInfo)).checked(info_open))
                     }),
             )
             .text_color(pal.text)
     }
 
+    /// Windows: the strip across the top of the window, standing in for the
+    /// system title bar the window hides: the menus on the left, the window
+    /// buttons on the right, and the empty space between drags the window.
+    pub fn windows_titlebar(&self, pal: &Palette, window: &Window) -> impl IntoElement {
+        div()
+            .id("win-titlebar")
+            .h(px(WIN_TITLEBAR_H))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .bg(pal.sidebar)
+            .border_b_1()
+            .border_color(pal.border)
+            .when_some(self.app_menu_bar.clone(), |d, bar| d.child(div().pl(px(4.)).child(bar)))
+            .child(div().flex_1().h_full().window_control_area(WindowControlArea::Drag))
+            .child(window_controls(window, pal, true))
+    }
+}
+
+/// Height of the Windows title bar strip and its window buttons.
+pub const WIN_TITLEBAR_H: f32 = 32.;
+
+/// Windows: minimize, maximize/restore and close, drawn by us because the
+/// windows hide the system title bar. Windows itself handles the clicks on
+/// these areas, so they behave like the native buttons (snap layouts too).
+pub fn window_controls(window: &Window, pal: &Palette, min_max: bool) -> impl IntoElement {
+    let button = |id: &'static str, icon: IconName, area: WindowControlArea| {
+        let close = area == WindowControlArea::Close;
+        let hover_bg = if close { rgb(0xc42b1c).into() } else { pal.hover };
+        div()
+            .id(id)
+            .w(px(46.))
+            .h_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(pal.text)
+            .hover(move |s| {
+                let s = s.bg(hover_bg);
+                if close { s.text_color(gpui_kit::white()) } else { s }
+            })
+            .window_control_area(area)
+            .child(Icon::new(icon).size(px(14.)))
+    };
+    let maximize_icon = if window.is_maximized() { IconName::WindowRestore } else { IconName::WindowMaximize };
+    div()
+        .h(px(WIN_TITLEBAR_H))
+        .flex()
+        .flex_shrink_0()
+        .when(min_max, |d| {
+            d.child(button("win-min", IconName::WindowMinimize, WindowControlArea::Min))
+                .child(button("win-max", maximize_icon, WindowControlArea::Max))
+        })
+        .child(button("win-close", IconName::WindowClose, WindowControlArea::Close))
+}
+
+impl GlyphClub {
     pub fn update_banner(&self, pal: &Palette, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let version = self.update_available.clone().filter(|_| !self.dismissed_update)?;
         let version_for_skip = version.clone();
