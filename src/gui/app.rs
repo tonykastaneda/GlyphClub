@@ -71,6 +71,8 @@ pub struct GlyphClub {
     pub info_open: bool,
     pub busy: Option<SharedString>,
     pub notices: Vec<(SharedString, bool)>,
+    /// The last few notices, for remote inspection.
+    pub recent_notices: Vec<(SharedString, bool)>,
     pub update_available: Option<String>,
     pub dismissed_update: bool,
     /// Families expanded into their faces in the list view, by key.
@@ -225,6 +227,7 @@ impl GlyphClub {
             info_open: false,
             busy: None,
             notices: Vec::new(),
+            recent_notices: Vec::new(),
             update_available: None,
             dismissed_update: false,
             expanded: HashSet::new(),
@@ -331,11 +334,20 @@ impl GlyphClub {
     }
 
     pub fn notify(&mut self, message: impl Into<SharedString>) {
-        self.notices.push((message.into(), false));
+        self.push_notice(message.into(), false);
     }
 
     pub fn notify_error(&mut self, message: impl Into<SharedString>) {
-        self.notices.push((message.into(), true));
+        self.push_notice(message.into(), true);
+    }
+
+    fn push_notice(&mut self, message: SharedString, is_error: bool) {
+        // Also kept for `glyphclub-cli app state`, which can't see toasts.
+        self.recent_notices.push((message.clone(), is_error));
+        if self.recent_notices.len() > 10 {
+            self.recent_notices.remove(0);
+        }
+        self.notices.push((message, is_error));
     }
 
     /// Runs a slow catalog job (scanning, deleting) off the main thread,
@@ -495,18 +507,23 @@ impl GlyphClub {
 
     pub fn activate_temporarily(&mut self, key: Option<SharedString>, cx: &mut Context<Self>) {
         let ids = self.target_ids(&self.targets(key.as_ref()));
+        let mut errors = Vec::new();
         {
-            let mut catalog = self.catalog.lock().unwrap();
+            let catalog = self.catalog.clone();
+            let mut catalog = catalog.lock().unwrap();
             for id in ids {
                 match catalog.activate_temporarily(id) {
                     Ok(true) => {
                         self.temporary.insert(id);
                     }
                     Ok(false) => {}
-                    Err(e) => self.notices.push((format!("Couldn't activate: {e:#}").into(), true)),
+                    Err(e) => errors.push(format!("Couldn't activate: {e:#}")),
                 }
             }
             self.lib.active = catalog.active_ids().unwrap_or_default();
+        }
+        for e in errors {
+            self.notify_error(e);
         }
         self.after_state_change(cx);
     }
@@ -763,10 +780,10 @@ impl GlyphClub {
         cx.notify();
         cx.spawn(async move |this, cx| {
             use crate::illustrator::{apply_font, ApplyResult};
-            // Illustrator can take a moment to see a font that was just
-            // activated; retry a few times before giving up.
+            // Illustrator can take several seconds to see a font that was
+            // just activated; keep trying for about 15 seconds.
             let mut result = ApplyResult::FontNotLoaded;
-            for attempt in 0..6 {
+            for attempt in 0..20 {
                 if attempt > 0 || newly_active {
                     cx.background_executor().timer(Duration::from_millis(800)).await;
                 }
@@ -1035,10 +1052,10 @@ impl GlyphClub {
                 let result = self.handle_ui(&command, &args, window, cx);
                 let _ = reply.send(result);
             }
-            BridgeEvent::PluginVersionSeen(seen) => {
+            BridgeEvent::PluginVersionSeen(seen, latest) => {
                 // Once per session: an older plug-in than this build ships.
                 if self.plugin_update_noted.is_none() {
-                    if let Some(latest) = crate::bridge::latest_plugin_version() {
+                    if let Some(latest) = latest {
                         if seen != latest {
                             self.notify(format!(
                                 "The Illustrator plug-in ({seen}) is out of date. Update it to {latest} in Settings ▸ Integrations."

@@ -12,7 +12,7 @@ use crate::settings::{AppSettings, Appearance, SortField, ViewMode};
 pub const HELP: &str = "state | view grid|list | nav all|system|starred|recents|library <name>|tag <name>|icons <set> | \
 select <family>… | deselect | info open|close | tab preview|sizes|glyphs|features|info | face <style> | \
 sample <text> | size <n> | search <text> | sort <field> [asc|desc] | expand on|off | sidebar show|hide | \
-theme light|dark|system | window <w> <h> | settings general|sidebar|import|auto | action <name> | scroll top|<row>";
+theme light|dark|system | window <w> <h> | settings general|sidebar|import|auto | action <name> | scroll top|<row> | illustrator-apply <family>";
 
 impl GlyphClub {
     pub fn handle_ui(
@@ -229,6 +229,19 @@ impl GlyphClub {
                 };
                 self.scroll_to_row(pos, cx);
             }
+            "illustrator-apply" => {
+                // What a card's Ai button does: set Illustrator's selected
+                // text to this family (activating it first if needed).
+                let lower = rest.to_lowercase();
+                let key = self
+                    .lib
+                    .families
+                    .iter()
+                    .find(|f| f.name.to_lowercase() == lower)
+                    .map(|f| f.key.clone())
+                    .ok_or_else(|| format!("no family “{rest}”"))?;
+                self.apply_in_illustrator(key, cx);
+            }
             "help" => return Ok(json!({ "commands": HELP })),
             other => return Err(format!("unknown command “{other}”. Commands: {HELP}")),
         }
@@ -323,6 +336,7 @@ impl GlyphClub {
             "visible": visible,
             "busy": self.busy.as_ref().map(|b| b.to_string()),
             "updateAvailable": self.update_available,
+            "notices": self.recent_notices.iter().map(|(m, e)| json!({ "message": m.to_string(), "error": e })).collect::<Vec<_>>(),
         })
     }
 }
