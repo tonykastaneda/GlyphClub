@@ -35,6 +35,21 @@ New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
 Copy-Item "target/release/GlyphClub.exe" "$StageDir/GlyphClub.exe"
 # The bundled free icon font sets, with their licenses (see src/icons.rs).
 Copy-Item -Recurse "assets/icon-fonts" "$StageDir/icon-fonts"
+# The Illustrator plug-in, one per Illustrator architecture, built first with
+# plugin/CMakeLists.txt (needs Adobe's SDK; see the release workflow).
+# Settings > Auto Activation installs the matching one (src/integrations.rs).
+foreach ($Arch in "x64", "arm64") {
+    $Built = "plugin/build-win-$Arch/Release/GlyphClub.aip"
+    if (Test-Path $Built) {
+        New-Item -ItemType Directory -Force -Path "$StageDir/plugins/$Arch" | Out-Null
+        Copy-Item $Built "$StageDir/plugins/$Arch/GlyphClub.aip"
+        Write-Host "==> Included the $Arch Illustrator plug-in"
+    } elseif ($env:REQUIRE_PLUGIN) {
+        throw "Missing $Built (build it with plugin/CMakeLists.txt)"
+    } else {
+        Write-Warning "No $Arch Illustrator plug-in at $Built; packaging without it"
+    }
+}
 
 Write-Host "==> Zipping"
 $ZipPath = "target/package/$ZipName"

@@ -142,6 +142,29 @@ jobs:
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           fi
 
+      # The Illustrator plug-in needs Adobe's SDK, which can't be committed
+      # here. An encrypted copy is in tonykastaneda/Slippy's public
+      # "sdk-illustrator-2026" release; the SDK_KEY secret decrypts it.
+      - name: Download Illustrator SDK
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_KEY: ${{ secrets.SDK_KEY }}
+        run: |
+          if [ -z "$SDK_KEY" ]; then
+            echo "::warning::No SDK_KEY secret; the Windows zip won't include the Illustrator plug-in"
+            exit 0
+          fi
+          gh release download sdk-illustrator-2026 --repo tonykastaneda/Slippy --pattern AdobeIllustratorSDK.zip.enc --dir "$RUNNER_TEMP"
+          printf '%s' "$SDK_KEY" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$RUNNER_TEMP/AdobeIllustratorSDK.zip.enc" -out "$RUNNER_TEMP/AdobeIllustratorSDK.zip" -pass stdin
+          7z x -y -bd -o"$RUNNER_TEMP/sdk" "$RUNNER_TEMP/AdobeIllustratorSDK.zip" > /dev/null
+          echo "AI_SDK=$RUNNER_TEMP/sdk/AdobeIllustratorSDK" >> "$GITHUB_ENV"
+          echo "REQUIRE_PLUGIN=1" >> "$GITHUB_ENV"
+
+      - name: Build Illustrator plug-in
+        if: env.AI_SDK != ''
+        run: ./scripts/build-windows-plugin.ps1
+
       - name: Build and package
         env:
           VERSION: ${{ steps.version.outputs.version }}

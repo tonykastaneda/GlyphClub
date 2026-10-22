@@ -287,13 +287,14 @@ impl SettingsView {
 
     fn auto_activation(&self, s: &Settings, pal: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let mut apps = div().flex().flex_col();
-        if !cfg!(target_os = "macos") {
+        if self.installs.is_empty() {
+            let where_ = if cfg!(windows) { "Program Files\\Adobe" } else { "/Applications" };
             apps = apps.child(
-                div().p(px(10.)).text_size(px(12.)).text_color(pal.text_dim).child("The Illustrator plug-in is macOS-only for now."),
-            );
-        } else if self.installs.is_empty() {
-            apps = apps.child(
-                div().p(px(10.)).text_size(px(12.)).text_color(pal.text_dim).child("No Adobe Illustrator found in /Applications."),
+                div()
+                    .p(px(10.))
+                    .text_size(px(12.))
+                    .text_color(pal.text_dim)
+                    .child(format!("No Adobe Illustrator found in {where_}.")),
             );
         }
         for (i, install) in self.installs.iter().enumerate() {
@@ -444,7 +445,14 @@ impl SettingsView {
         let bundled = self.bundled.clone();
         self.busy = true;
         self.status = Some((
-            if uninstall { "Removing…" } else { "Installing… macOS will ask for your password." }.into(),
+            if uninstall {
+                "Removing…"
+            } else if cfg!(windows) {
+                "Installing… Windows will ask for permission."
+            } else {
+                "Installing… macOS will ask for your password."
+            }
+            .into(),
             false,
         ));
         cx.notify();

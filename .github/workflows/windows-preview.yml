@@ -1,0 +1,56 @@
+# A Windows build to try out, without making a release: the same zip the
+# release has (GlyphClub.exe, icon fonts, the Illustrator plug-in for x64 and
+# ARM64), uploaded as this run's "GlyphClub-Windows" artifact.
+#
+#   gh workflow run windows-preview.yml
+name: Windows preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "plugin/**"
+      - "scripts/*windows*"
+      - ".github/workflows/windows-preview.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Download Illustrator SDK
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_KEY: ${{ secrets.SDK_KEY }}
+        run: |
+          if [ -z "$SDK_KEY" ]; then
+            echo "::error::No SDK_KEY secret, so no Illustrator plug-in"
+            exit 1
+          fi
+          gh release download sdk-illustrator-2026 --repo tonykastaneda/Slippy --pattern AdobeIllustratorSDK.zip.enc --dir "$RUNNER_TEMP"
+          printf '%s' "$SDK_KEY" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$RUNNER_TEMP/AdobeIllustratorSDK.zip.enc" -out "$RUNNER_TEMP/AdobeIllustratorSDK.zip" -pass stdin
+          7z x -y -bd -o"$RUNNER_TEMP/sdk" "$RUNNER_TEMP/AdobeIllustratorSDK.zip" > /dev/null
+          echo "AI_SDK=$RUNNER_TEMP/sdk/AdobeIllustratorSDK" >> "$GITHUB_ENV"
+
+      - name: Build Illustrator plug-in
+        run: ./scripts/build-windows-plugin.ps1
+
+      - name: Build and package
+        env:
+          REQUIRE_PLUGIN: "1"
+        run: ./scripts/package-windows.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GlyphClub-Windows
+          path: target/package/windows/

@@ -130,6 +130,17 @@ pub fn show_running_instance() -> bool {
         .unwrap_or(false)
 }
 
+/// Windows: records this GlyphClub.exe's path in `app-path.txt` next to
+/// `bridge.json`, so the Illustrator plug-in can start GlyphClub when it
+/// isn't running (a zip install can live anywhere). macOS finds the app by
+/// its bundle ID instead.
+pub fn record_app_path() {
+    #[cfg(windows)]
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = std::fs::write(session_path().with_file_name("app-path.txt"), exe.to_string_lossy().as_bytes());
+    }
+}
+
 /// Removes `bridge.json` on quit, so the plug-in knows straight away that
 /// GlyphClub isn't running rather than timing out on a dead port.
 pub fn stop() {

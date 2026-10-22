@@ -136,6 +136,11 @@ fn main() {
         // Rewrites the login item to point at this build.
         login_item::refresh();
     }
+    // The Illustrator plug-in starts GlyphClub with --background when a
+    // document is missing fonts: show the window, but leave Illustrator in
+    // front.
+    let background = std::env::args().any(|a| a == "--background");
+    bridge::record_app_path();
     let (bridge_tx, bridge_rx) = mpsc::channel();
     bridge::start(bridge_tx);
 
@@ -183,7 +188,7 @@ fn main() {
                     // window; controls up there must not.
                     app_owns_titlebar_drag: true,
                     show: !start_hidden,
-                    focus: !start_hidden,
+                    focus: !start_hidden && !background,
                     app_id: Some("com.tonykastaneda.glyphclub".into()),
                     ..Default::default()
                 },
@@ -266,7 +271,7 @@ fn main() {
         })
         .detach();
 
-        if !start_hidden {
+        if !start_hidden && !background {
             cx.activate(true);
         }
     });
