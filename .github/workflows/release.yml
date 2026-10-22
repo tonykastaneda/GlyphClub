@@ -19,6 +19,10 @@ on:
       version:
         description: "Version to build (e.g. 0.1.0) — only needed for a manual run off a non-tag commit"
         required: false
+      draft:
+        description: "Internal release: keep it as a draft instead of publishing"
+        type: boolean
+        default: false
 
 jobs:
   macos:
@@ -158,6 +162,9 @@ jobs:
           files: |
             artifacts/macos-dmg/*.dmg
             artifacts/windows-zip/*.zip
-          draft: false
-          make_latest: true
+          # A tag push publishes. A manual run with draft=true ("release
+          # internally") leaves a draft; its tag is made when it's published.
+          tag_name: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          draft: ${{ github.event.inputs.draft == 'true' }}
+          make_latest: ${{ github.event.inputs.draft == 'true' && 'false' || 'true' }}
           generate_release_notes: true
