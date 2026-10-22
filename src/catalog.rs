@@ -12,7 +12,7 @@ use notify_debouncer_mini::{new_debouncer, Debouncer};
 
 use crate::activate;
 use crate::activation_memory;
-use crate::scan::{force_touch_folder, scan_folder};
+use crate::scan::{force_touch_folder, scan_folder, scan_folder_with, ScanSummary};
 use crate::store::{Folder, FontRow, Store};
 
 pub struct ScanResult {
@@ -27,6 +27,25 @@ pub struct ScanResult {
 /// "LIBRARIES" list to hide these rows (they're not a folder the user
 /// picked, so removing them the normal way wouldn't make sense) and what
 /// marks a scanned font as `is_system` in the first place.
+/// Scans a user library through its shared `.glyphclub` file (see
+/// `library_file`): fonts the file already describes aren't opened, and the
+/// file is rewritten afterwards if this scan changed what it should say.
+/// The OS's own font folders are scanned plainly — they aren't anyone's
+/// library to write into.
+fn scan_library(store: &mut Store, folder: &Folder, ignored: &HashSet<String>) -> Result<ScanSummary> {
+    if system_font_dirs().contains(&folder.path.as_str()) {
+        return scan_folder(store, folder, ignored);
+    }
+    let shared = crate::library_file::load(&folder.path);
+    let summary = scan_folder_with(store, folder, ignored, &shared)?;
+    if let Ok(records) = store.folder_records(folder.id) {
+        if let Err(e) = crate::library_file::save(&folder.path, &records, ignored) {
+            eprintln!("library file for {}: {e}", folder.path);
+        }
+    }
+    Ok(summary)
+}
+
 fn system_font_dirs() -> &'static [&'static str] {
     #[cfg(target_os = "macos")]
     {
@@ -103,7 +122,7 @@ impl Catalog {
         // above are rescanned on a normal launch.
         if store.needs_postscript_backfill().unwrap_or(false) {
             for folder in store.list_folders().unwrap_or_default() {
-                let _ = scan_folder(&mut store, &folder, &ignored);
+                let _ = scan_library(&mut store, &folder, &ignored);
             }
         }
 
@@ -127,6 +146,17 @@ impl Catalog {
         }
 
         remove_orphaned_copies(&store);
+
+        // Libraries catalogued before the shared `.glyphclub` file existed
+        // get one now, from the catalog (no font is opened).
+        for folder in store.list_folders().unwrap_or_default() {
+            if system_font_dirs().contains(&folder.path.as_str()) || crate::library_file::has_file(&folder.path) {
+                continue;
+            }
+            if let Ok(records) = store.folder_records(folder.id) {
+                let _ = crate::library_file::save(&folder.path, &records, &ignored);
+            }
+        }
 
         let mut watcher = new_debouncer(
             Duration::from_millis(800),
@@ -183,7 +213,11 @@ impl Catalog {
         }
         let folders = self.store.list_folders()?;
         let mut status = match folders.iter().find(|f| f.id == id) {
-            Some(folder) => match scan_folder(&mut self.store, folder, &self.ignored) {
+            Some(folder) => match scan_library(&mut self.store, folder, &self.ignored) {
+                Ok(summary) if summary.from_shared_files > 0 => format!(
+                    "{} from the library's .glyphclub file, {} read, {} failed",
+                    summary.from_shared_files, summary.parsed_files, summary.failed_files
+                ),
                 Ok(summary) => {
                     format!(
                         "{} indexed, {} failed",
@@ -239,7 +273,7 @@ impl Catalog {
         let mut removed = 0usize;
         let mut failed = 0usize;
         for folder in &folders {
-            if let Ok(summary) = scan_folder(&mut self.store, folder, &self.ignored) {
+            if let Ok(summary) = scan_library(&mut self.store, folder, &self.ignored) {
                 parsed += summary.parsed_files;
                 removed += summary.removed_files;
                 failed += summary.failed_files;

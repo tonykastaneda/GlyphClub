@@ -317,6 +317,25 @@ impl Store {
         Ok(rows)
     }
 
+    /// Every face catalogued under one folder with its character coverage,
+    /// for the library's shared file (see `library_file`).
+    pub fn folder_records(&self, folder_id: i64) -> Result<Vec<FontRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size, COALESCE(postscript_name, ''), COALESCE(added, mtime), coverage
+             FROM fonts
+             WHERE folder_id = ?1",
+        )?;
+        let rows = stmt
+            .query_map([folder_id], |row| {
+                let mut font = row_to_font(row)?;
+                let coverage: Option<Vec<u8>> = row.get(13)?;
+                font.record.coverage = Some(coverage.map(|b| crate::coverage::decode(&b)).unwrap_or_default());
+                Ok(font.record)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     pub fn all_fonts(&self) -> Result<Vec<FontRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, folder_id, path, face_index, family, subfamily, weight, italic, monospace, mtime, size, COALESCE(postscript_name, ''), COALESCE(added, mtime)

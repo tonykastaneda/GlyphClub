@@ -11,6 +11,7 @@ pub mod font_export;
 pub mod font_info;
 pub mod icons;
 pub mod integrations;
+pub mod library_file;
 pub mod login_item;
 pub mod reveal;
 pub mod scan;

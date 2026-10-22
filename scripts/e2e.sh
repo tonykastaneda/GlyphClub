@@ -74,6 +74,9 @@ check "orphaned activation copy removed" test ! -e "$UFONTS/glyphclub-99999.ttf"
 out=$(cli add "$LIB" 2>&1); [[ $out == *indexed* ]] && ok "add library" || bad "add library" "$out"
 n=$(cli --json libraries | j "[l['fonts'] for l in d['libraries'] if l['name']=='E2E Library'][0]" 2>/dev/null)
 [[ $n == 3 ]] && ok "library lists 3 fonts" || bad "library lists 3 fonts" "got $n"
+# The library's shared font info, named after its folder (src/library_file.rs).
+shared_fonts=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))['fonts']))" "$LIB/E2E Library.glyphclub" 2>/dev/null)
+[[ $shared_fonts == 3 ]] && ok "library gets its .glyphclub file" || bad "library gets its .glyphclub file" "got ${shared_fonts:-no file}"
 fams=$(cli --json list --library "E2E Library" | j "' | '.join(f['family'] for f in d['families'])")
 [[ -n $fams ]] && ok "list by library ($fams)" || bad "list by library"
 FAM1=$(cli --json list --library "E2E Library" | j "d['families'][0]['family']")

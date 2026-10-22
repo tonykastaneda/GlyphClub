@@ -14,6 +14,8 @@ pub struct ScanSummary {
     pub parsed_files: usize,
     pub removed_files: usize,
     pub failed_files: usize,
+    /// Taken from the library's shared file rather than read.
+    pub from_shared_files: usize,
 }
 
 /// Walks `folder` on disk, parses whatever is new or changed since the last
@@ -23,10 +25,24 @@ pub struct ScanSummary {
 /// Remove from Fontlist — see `store::ignored_paths`) is skipped entirely,
 /// as if the file weren't there: not indexed, and not treated as "removed"
 /// either, since it's really still sitting on disk.
+///
+/// `shared` is the library's `.glyphclub` file (see `library_file`): a new
+/// or changed file it already describes, at the same size and date, is
+/// taken from there instead of being opened.
 pub fn scan_folder(store: &mut Store, folder: &Folder, ignored: &HashSet<String>) -> Result<ScanSummary> {
+    scan_folder_with(store, folder, ignored, &crate::library_file::Shared::new())
+}
+
+pub fn scan_folder_with(
+    store: &mut Store,
+    folder: &Folder,
+    ignored: &HashSet<String>,
+    shared: &crate::library_file::Shared,
+) -> Result<ScanSummary> {
     let known = store.known_files(folder.id)?;
     let mut seen = HashSet::with_capacity(known.len());
     let mut to_parse: Vec<(String, i64, i64)> = Vec::new();
+    let mut from_file: Vec<(String, Vec<FontRecord>)> = Vec::new();
 
     for entry in WalkDir::new(&folder.path)
         .follow_links(false)
@@ -55,7 +71,13 @@ pub fn scan_folder(store: &mut Store, folder: &Folder, ignored: &HashSet<String>
         seen.insert(path_str.clone());
 
         if known.get(&path_str) != Some(&(mtime, size)) {
-            to_parse.push((path_str, mtime, size));
+            let from_shared = crate::library_file::relative(&folder.path, &path_str)
+                .and_then(|rel| shared.get(&rel))
+                .and_then(|entry| crate::library_file::records_if_current(entry, &path_str, size, mtime));
+            match from_shared {
+                Some(records) => from_file.push((path_str, records)),
+                None => to_parse.push((path_str, mtime, size)),
+            }
         }
     }
 
@@ -84,6 +106,10 @@ pub fn scan_folder(store: &mut Store, folder: &Folder, ignored: &HashSet<String>
     for (path_str, records) in &parsed {
         store.replace_faces(folder.id, path_str, records)?;
         summary.parsed_files += 1;
+    }
+    for (path_str, records) in &from_file {
+        store.replace_faces(folder.id, path_str, records)?;
+        summary.from_shared_files += 1;
     }
 
     for stale in known.keys().filter(|p| !seen.contains(*p)) {
