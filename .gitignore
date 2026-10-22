@@ -5,3 +5,6 @@
 # Claude Code: local settings and the e2e Stop hook's pass marker
 .claude/settings.local.json
 .claude/e2e-passed
+
+# Windows plug-in builds (plugin/CMakeLists.txt)
+/plugin/build-win-*

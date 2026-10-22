@@ -1,0 +1,36 @@
+// Windows resources for GlyphClub.aip: the PiPL (generated at build time by
+// the SDK's create_pipl.py into the build directory) and version info.
+// GlyphClub reads ProductVersion to tell whether the installed copy is
+// older than the one it ships (src/integrations.rs).
+#include <windows.h>
+#include "GlyphClubVersion.h"
+
+plugin pipl "plugin.pipl"
+
+1 VERSIONINFO
+ FILEVERSION GLYPHCLUB_VERSION_COMMAS
+ PRODUCTVERSION GLYPHCLUB_VERSION_COMMAS
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_DLL
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "GlyphClub"
+            VALUE "FileDescription", "GlyphClub - activates missing fonts in Illustrator"
+            VALUE "FileVersion", GLYPHCLUB_VERSION_STRING
+            VALUE "InternalName", "GlyphClub"
+            VALUE "OriginalFilename", "GlyphClub.aip"
+            VALUE "ProductName", "GlyphClub"
+            VALUE "ProductVersion", GLYPHCLUB_VERSION_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

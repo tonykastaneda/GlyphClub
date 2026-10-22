@@ -41,6 +41,7 @@ SOURCES := \
 
 MM_SOURCES := \
 	Source/Bridge.mm \
+	Source/PlatformMac.mm \
 	Source/Panel.mm \
 	Source/PanelView.mm
 

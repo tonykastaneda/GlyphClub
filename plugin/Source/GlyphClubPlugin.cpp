@@ -2,21 +2,21 @@
 #include "GlyphClubPlugin.h"
 #include "Bridge.h"
 #include "Panel.h"
+#include "Platform.h"
 #include "AppContext.hpp"
 
-#import <Foundation/Foundation.h>
+#include <cstring>
 
 namespace {
 
 GlyphClubPlugin* gPlugin = nullptr;   // main thread; null once shutting down
 SPPluginRef gPluginRef = nullptr;
-dispatch_source_t gPingTimer = nullptr;
 
 AINotifierHandle gDocumentOpened = nullptr;
 AINotifierHandle gDocumentClosed = nullptr;
 AINotifierHandle gFontListChanged = nullptr;
 
-NSString* const kAutoKey = @"GlyphClubAutoActivate";
+const char* const kAutoKey = "GlyphClubAutoActivate";
 
 // PostScript names from an XMP packet's font list: <stFnt:fontName>X</...>,
 // or the attribute form stFnt:fontName="X" some writers use.
@@ -98,8 +98,8 @@ ASErr GlyphClubPlugin::StartupPlugin(SPInterfaceMessage* message)
 	ASErr error = Plugin::StartupPlugin(message);
 	if (error) return error;
 
-	NSNumber* saved = [[NSUserDefaults standardUserDefaults] objectForKey:kAutoKey];
-	fAuto = saved ? saved.boolValue : true;
+	glyphclub::platform::Start();
+	fAuto = glyphclub::platform::LoadBool(kAutoKey, true);
 
 	AIPlatformAddMenuItemDataUS menuData;
 	menuData.groupName = kGlyphClubMenuGroup;
@@ -125,7 +125,7 @@ void GlyphClubPlugin::AddPanel()
 	PanelCallbacks callbacks;
 	callbacks.autoChanged = [this](bool on) {
 		fAuto = on;
-		[[NSUserDefaults standardUserDefaults] setBool:on forKey:kAutoKey];
+		glyphclub::platform::SaveBool(kAutoKey, on);
 		PanelLogLine(on ? "Auto-activation on" : "Auto-activation off", PanelLog::Info);
 		if (on) {
 			AppContext context(gPluginRef);
@@ -153,17 +153,14 @@ ASErr GlyphClubPlugin::PostStartupPlugin()
 	gPluginRef = fPluginRef;
 	RefreshConnection();
 	// Keeps the panel's status honest when GlyphClub starts or quits.
-	gPingTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
-	dispatch_source_set_timer(gPingTimer, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), 10 * NSEC_PER_SEC, 2 * NSEC_PER_SEC);
-	dispatch_source_set_event_handler(gPingTimer, ^{ if (gPlugin) gPlugin->RefreshConnection(); });
-	dispatch_resume(gPingTimer);
+	glyphclub::platform::Repeat(10, [] { if (gPlugin) gPlugin->RefreshConnection(); });
 	return error;
 }
 
 ASErr GlyphClubPlugin::ShutdownPlugin(SPInterfaceMessage* message)
 {
 	gPlugin = nullptr;
-	if (gPingTimer) { dispatch_source_cancel(gPingTimer); gPingTimer = nullptr; }
+	glyphclub::platform::Stop();
 	PanelDetach();
 	if (fPanel && sAIPanel) { sAIPanel->Destroy(fPanel); fPanel = nullptr; }
 	return Plugin::ShutdownPlugin(message);
