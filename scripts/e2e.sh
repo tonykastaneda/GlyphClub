@@ -175,7 +175,14 @@ PY
 [[ $bad_token == *"bad token"* ]] && ok "bridge refuses a wrong token" || bad "bridge refuses a wrong token" "$bad_token"
 
 print "==> Quit"
+# The app runs in the menu bar here (menu_bar=true), where Cmd-Q only puts
+# it away; QuitCompletely is the menu bar icon's Quit.
 cli app action Quit >/dev/null 2>&1
+sleep 1
+if [[ $menu_bar == true ]]; then
+  kill -0 $APP_PID 2>/dev/null && ok "Cmd-Q keeps it running in the menu bar" || bad "Cmd-Q keeps it running in the menu bar"
+fi
+cli app action QuitCompletely >/dev/null 2>&1
 for i in {1..20}; do kill -0 $APP_PID 2>/dev/null || break; sleep 0.5; done
 kill -0 $APP_PID 2>/dev/null && bad "app quits" || { ok "app quits"; APP_PID=""; }
 [[ -f "$DATA/bridge.json" ]] && bad "quit removes bridge.json" || ok "quit removes bridge.json"

@@ -13,6 +13,9 @@ actions!(
         CheckForUpdates,
         OpenSettings,
         Quit,
+        // Quits even while GlyphClub lives in the menu bar (where Quit only
+        // hides it): the menu bar icon's Quit, and glyphclub-cli.
+        QuitCompletely,
         HideApp,
         HideOthers,
         ShowAll,

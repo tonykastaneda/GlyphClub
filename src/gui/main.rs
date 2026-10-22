@@ -197,6 +197,7 @@ fn main() {
 
         // Cmd-Q (File ▸ Exit on Windows) puts GlyphClub away in the menu
         // bar / tray while it lives there; the icon's own Quit really quits.
+        cx.on_action(|_: &QuitCompletely, cx| cx.quit());
         cx.on_action(|_: &Quit, cx| {
             if !in_tray(cx) {
                 return cx.quit();
