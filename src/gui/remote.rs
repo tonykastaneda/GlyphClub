@@ -12,7 +12,8 @@ use crate::settings::{AppSettings, Appearance, SortField, ViewMode};
 pub const HELP: &str = "state | view grid|list | nav all|system|starred|recents|library <name>|tag <name>|icons <set> | \
 select <family>… | deselect | info open|close | tab preview|sizes|glyphs|features|info | face <style> | \
 sample <text> | size <n> | search <text> | sort <field> [asc|desc] | expand on|off | sidebar show|hide | \
-theme light|dark|system | window <w> <h> | settings general|sidebar|import|auto | action <name> | scroll top|<row> | illustrator-apply <family>";
+theme light|dark|system | window <w> <h> | settings general|sidebar|import|auto | action <name> | scroll top|<row> | illustrator-apply <family> | \
+icon-copy <set> <icon> [vectors|svg]";
 
 impl GlyphClub {
     pub fn handle_ui(
@@ -241,6 +242,36 @@ impl GlyphClub {
                     .map(|f| f.key.clone())
                     .ok_or_else(|| format!("no family “{rest}”"))?;
                 self.apply_in_illustrator(key, cx);
+            }
+            "icon-copy" => {
+                // What an icon's double-click (vectors) or Copy as SVG does.
+                let set = arg(0).to_lowercase();
+                let set_ix = self
+                    .icon_sets
+                    .iter()
+                    .position(|s| s.slug == set || s.name.to_lowercase() == set)
+                    .ok_or_else(|| format!("no icon set “{set}”"))?;
+                let icon = self.icon_sets[set_ix]
+                    .icons
+                    .iter()
+                    .find(|i| i.name == arg(1))
+                    .map(|i| (i.codepoint, i.name.clone()))
+                    .ok_or_else(|| format!("no icon “{}” in {set}", arg(1)))?;
+                let font = self.icon_font(set_ix, cx).ok_or("couldn't load the icon font")?;
+                let drag = crate::icon_view::IconDrag {
+                    font,
+                    outline: "".into(),
+                    codepoint: icon.0,
+                    name: icon.1.into(),
+                };
+                let copied = match arg(2) {
+                    "" | "vectors" => crate::icon_view::copy_vectors(&drag, cx),
+                    "svg" => crate::icon_view::copy_svg(&drag, cx),
+                    other => return Err(format!("icon-copy: expected vectors or svg, got “{other}”")),
+                };
+                if !copied {
+                    return Err("couldn't copy that icon".into());
+                }
             }
             "help" => return Ok(json!({ "commands": HELP })),
             other => return Err(format!("unknown command “{other}”. Commands: {HELP}")),

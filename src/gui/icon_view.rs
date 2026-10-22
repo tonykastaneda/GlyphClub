@@ -71,7 +71,7 @@ pub fn copy_svg(d: &IconDrag, cx: &mut App) -> bool {
 
 /// Publish artwork bytes directly; Illustrator can paste the vector PDF.
 #[cfg(target_os = "macos")]
-fn copy_vectors(d: &IconDrag, _: &mut App) -> bool {
+pub fn copy_vectors(d: &IconDrag, _: &mut App) -> bool {
     use objc2_app_kit::NSPasteboard;
     use objc2_foundation::{NSData, NSString};
     let Some(pdf) = glyphclub::icons::icon_pdf(&d.font, d.codepoint, 64.) else { return false; };
@@ -84,7 +84,7 @@ fn copy_vectors(d: &IconDrag, _: &mut App) -> bool {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn copy_vectors(d: &IconDrag, cx: &mut App) -> bool { copy_svg(d, cx) }
+pub fn copy_vectors(d: &IconDrag, cx: &mut App) -> bool { copy_svg(d, cx) }
 
 impl GlyphClub {
     /// Cache source outlines; the virtual grid only generates icons it displays.
