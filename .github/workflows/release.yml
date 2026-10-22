@@ -19,8 +19,13 @@ on:
       version:
         description: "Version to build (e.g. 0.1.0) — only needed for a manual run off a non-tag commit"
         required: false
+  # release-internal.yml runs these same jobs as a draft.
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
       draft:
-        description: "Internal release: keep it as a draft instead of publishing"
         type: boolean
         default: false
 
@@ -39,8 +44,8 @@ jobs:
       - name: Determine version
         id: version
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
           else
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           fi
@@ -131,8 +136,8 @@ jobs:
         id: version
         shell: bash
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
           else
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           fi
@@ -162,9 +167,9 @@ jobs:
           files: |
             artifacts/macos-dmg/*.dmg
             artifacts/windows-zip/*.zip
-          # A tag push publishes. A manual run with draft=true ("release
-          # internally") leaves a draft; its tag is made when it's published.
-          tag_name: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
-          draft: ${{ github.event.inputs.draft == 'true' }}
-          make_latest: ${{ github.event.inputs.draft == 'true' && 'false' || 'true' }}
+          # Published as Latest, unless release-internal.yml asked for a
+          # draft (its tag is made when the draft is published).
+          tag_name: ${{ inputs.version && format('v{0}', inputs.version) || github.ref_name }}
+          draft: ${{ inputs.draft == true }}
+          make_latest: ${{ inputs.draft == true && 'false' || 'true' }}
           generate_release_notes: true

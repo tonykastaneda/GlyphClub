@@ -88,10 +88,10 @@ Pushing a tag like `v0.1.0` runs `.github/workflows/release.yml`, which
 builds, signs, and notarizes a macOS DMG (Apple Silicon only) and builds a
 Windows zip (unsigned — no code-signing cert yet, so SmartScreen will warn
 on first run until one's added), then publishes a GitHub Release (marked Latest) with
-both attached. For an internal build, run the workflow by hand instead
-(`gh workflow run release.yml -f version=X.Y.Z -f draft=true`): it makes a
-draft release that only repo members can see, and its tag is created when
-it's published. `scripts/package-macos.sh`/`scripts/package-windows.ps1` are
+both attached. For an internal build, run
+`gh workflow run release-internal.yml -f version=X.Y.Z` instead: the same
+build, left as a draft release that only repo members can see (its tag is
+created when it's published). `scripts/package-macos.sh`/`scripts/package-windows.ps1` are
 the actual build/package logic; the workflow is mostly just credentials
 plumbing around them, and `package-macos.sh` also works standalone for a
 local build (it'll use a `notarytool` keychain profile instead of the CI

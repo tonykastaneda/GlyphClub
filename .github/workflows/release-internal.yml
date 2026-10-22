@@ -1,0 +1,24 @@
+name: Release (internal)
+
+# An internal build: the same signed, notarized DMG and Windows zip as
+# release.yml, left as a draft GitHub Release that only repo members can
+# see. Publish the draft later to make it a public release.
+#
+#   gh workflow run release-internal.yml -f version=0.2.3
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 0.2.3), matching Cargo.toml"
+        required: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ inputs.version }}
+      draft: true
+    secrets: inherit
+    permissions:
+      contents: write
