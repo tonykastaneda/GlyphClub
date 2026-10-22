@@ -1,5 +1,8 @@
 #include "IllustratorSDK.h"
 #include "GlyphClubSuites.h"
+// Declares the assertion suite even where asserts are compiled out
+// (Windows release builds), since it is still imported below.
+#include "AIAssertion.h"
 
 extern "C" {
 	SPBlocksSuite*			sSPBlocks = nullptr;

@@ -122,10 +122,10 @@ double Scale(HWND window)
 
 struct Fonts {
 	double scale = 0;
-	HFONT title = nullptr, body = nullptr, bodyBold = nullptr, small = nullptr, caption = nullptr;
+	HFONT title = nullptr, body = nullptr, bodyBold = nullptr, note = nullptr, caption = nullptr;
 	void Clear()
 	{
-		for (HFONT f : {title, body, bodyBold, small, caption})
+		for (HFONT f : {title, body, bodyBold, note, caption})
 			if (f) DeleteObject(f);
 		*this = Fonts();
 	}
@@ -141,7 +141,7 @@ struct Fonts {
 		title = make(13, FW_SEMIBOLD);
 		body = make(12, FW_NORMAL);
 		bodyBold = make(12, FW_SEMIBOLD);
-		small = make(11, FW_NORMAL);
+		note = make(11, FW_NORMAL);
 		caption = make(9.5, FW_SEMIBOLD);
 	}
 } gFonts;
@@ -242,9 +242,9 @@ void Paint(HWND window, HDC target)
 	gap(2);
 
 	// Status: a dot that lights up when connected.
-	int lineH = TextHeight(dc, gFonts.small);
+	int lineH = TextHeight(dc, gFonts.note);
 	Dot(dc, x + (int) (4 * s), y + lineH / 2, (int) (8 * s), gConnected ? c.accent : c.faint);
-	r = Text(dc, gStatus, gFonts.small, c.dim, x + (int) (14 * s), y, right);
+	r = Text(dc, gStatus, gFonts.note, c.dim, x + (int) (14 * s), y, right);
 	y = r.bottom;
 	gap(14);
 
@@ -254,7 +254,7 @@ void Paint(HWND window, HDC target)
 		r = Text(dc, L"Plug-in update " + gUpdate + L" available", gFonts.bodyBold, c.warning, x, y, right);
 		y = r.bottom;
 		gap(2);
-		r = Text(dc, L"Update it from Glyph Club's Settings.", gFonts.small, c.dim, x, y, right);
+		r = Text(dc, L"Update it from Glyph Club's Settings.", gFonts.note, c.dim, x, y, right);
 		y = r.bottom;
 		gap(6);
 		gOpenRect = Button(dc, L"Open Glyph Club", x, y, s, true, gHot == Hot::Open, gPressed == Hot::Open, c);
@@ -276,12 +276,12 @@ void Paint(HWND window, HDC target)
 	y += rowH;
 	gap(4);
 
-	r = Text(dc, MissingText(), gFonts.small, gMissing ? c.text : c.dim, x, y, right);
+	r = Text(dc, MissingText(), gFonts.note, gMissing ? c.text : c.dim, x, y, right);
 	y = r.bottom;
 	gap(8);
 
 	gActivateRect = Button(dc, L"Activate Missing Fonts", x, y, s, ActivateEnabled(), gHot == Hot::Activate, gPressed == Hot::Activate, c);
-	if (gBusy) Text(dc, L"Working…", gFonts.small, c.dim, gActivateRect.right + (int) (8 * s), gActivateRect.top, right);
+	if (gBusy) Text(dc, L"Working…", gFonts.note, c.dim, gActivateRect.right + (int) (8 * s), gActivateRect.top, right);
 	y = gActivateRect.bottom;
 	gap(16);
 
@@ -290,14 +290,14 @@ void Paint(HWND window, HDC target)
 	gap(4);
 
 	// Newest first; whatever fits.
-	int logH = TextHeight(dc, gFonts.small) + (int) (4 * s);
+	int logH = TextHeight(dc, gFonts.note) + (int) (4 * s);
 	for (const auto& line : gLog) {
 		if (y + logH > height - pad / 2) break;
 		COLORREF mark = line.kind == PanelLog::Activated ? c.accent : line.kind == PanelLog::Problem ? c.warning : c.faint;
 		Dot(dc, x + (int) (3 * s), y + logH / 2, (int) (6 * s), mark);
-		int timeW = TextWidth(dc, line.time, gFonts.small);
-		Text(dc, line.time, gFonts.small, c.faint, right - timeW, y + (int) (2 * s), right);
-		Text(dc, line.text, gFonts.small, c.text, x + (int) (12 * s), y + (int) (2 * s), right - timeW - (int) (8 * s));
+		int timeW = TextWidth(dc, line.time, gFonts.note);
+		Text(dc, line.time, gFonts.note, c.faint, right - timeW, y + (int) (2 * s), right);
+		Text(dc, line.text, gFonts.note, c.text, x + (int) (12 * s), y + (int) (2 * s), right - timeW - (int) (8 * s));
 		y += logH;
 	}
 
