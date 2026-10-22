@@ -13,6 +13,7 @@ on:
     paths:
       - "plugin/**"
       - "scripts/*windows*"
+      - "plugin-photoshop/**"
       - ".github/workflows/windows-preview.yml"
 
 permissions:
@@ -42,6 +43,18 @@ jobs:
           printf '%s' "$SDK_KEY" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$RUNNER_TEMP/AdobeIllustratorSDK.zip.enc" -out "$RUNNER_TEMP/AdobeIllustratorSDK.zip" -pass stdin
           7z x -y -bd -o"$RUNNER_TEMP/sdk" "$RUNNER_TEMP/AdobeIllustratorSDK.zip" > /dev/null
           echo "AI_SDK=$RUNNER_TEMP/sdk/AdobeIllustratorSDK" >> "$GITHUB_ENV"
+
+      - name: Download Photoshop SDK
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_KEY: ${{ secrets.SDK_KEY }}
+        run: |
+          if [ -z "$SDK_KEY" ]; then exit 0; fi
+          gh release download sdk-photoshop-2026 --repo "$GITHUB_REPOSITORY" --pattern AdobePhotoshopSDK.zip.enc --dir "$RUNNER_TEMP"
+          printf '%s' "$SDK_KEY" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$RUNNER_TEMP/AdobePhotoshopSDK.zip.enc" -out "$RUNNER_TEMP/AdobePhotoshopSDK.zip" -pass stdin
+          7z x -y -bd -o"$RUNNER_TEMP/pssdk" "$RUNNER_TEMP/AdobePhotoshopSDK.zip" > /dev/null
+          echo "PS_SDK=$RUNNER_TEMP/pssdk/AdobePhotoshopSDK/pluginsdk/photoshopapi" >> "$GITHUB_ENV"
 
       - name: Build Illustrator plug-in
         run: ./scripts/build-windows-plugin.ps1

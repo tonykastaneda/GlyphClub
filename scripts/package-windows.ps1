@@ -49,6 +49,14 @@ foreach ($Arch in "x64", "arm64") {
     } else {
         Write-Warning "No $Arch Illustrator plug-in at $Built; packaging without it"
     }
+    $Built = "plugin-photoshop/build-win-$Arch/Release/GlyphClub.8li"
+    if (Test-Path $Built) {
+        New-Item -ItemType Directory -Force -Path "$StageDir/plugins/$Arch" | Out-Null
+        Copy-Item $Built "$StageDir/plugins/$Arch/GlyphClub.8li"
+        Write-Host "==> Included the $Arch Photoshop plug-in"
+    } elseif ($env:REQUIRE_PLUGIN) {
+        throw "Missing $Built (build it with plugin-photoshop/CMakeLists.txt)"
+    }
 }
 
 Write-Host "==> Zipping"
