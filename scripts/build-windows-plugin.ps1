@@ -49,7 +49,22 @@ if ($env:ID_SDK) {
     $Shared = (Resolve-Path plugin/Source).Path
     $Out = Join-Path (Get-Location) "plugin-indesign/build-win-x64/Release/"
     New-Item -ItemType Directory -Force -Path $Out | Out-Null
-    $MSBuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
-    & $MSBuild "$Prj/GlyphClub.sdk.vcxproj" /nologo /m /p:Configuration=Release /p:Platform=x64 "/p:GlyphClubSrc=$Src" "/p:GlyphClubShared=$Shared" "/p:GlyphClubOut=$Out"
+    # The InDesign 2026 SDK only builds with Visual Studio 2022 17.12's
+    # compiler (MSVC 14.42): its precomp\msvc\xlocnum_hack.h stops any other
+    # version. That toolset is an optional component; add it when missing.
+    $VsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    $Vs = & $VsWhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath | Select-Object -First 1
+    $Toolset = Get-ChildItem "$Vs\VC\Tools\MSVC" -Directory -Filter "14.42.*" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $Toolset) {
+        Write-Host "==> Adding the MSVC 14.42 (VS 2022 17.12) toolset the InDesign SDK needs"
+        $Installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+        $p = Start-Process -FilePath $Installer -ArgumentList "modify", "--installPath", "`"$Vs`"", "--add", "Microsoft.VisualStudio.Component.VC.14.42.17.12.x86.x64", "--quiet", "--norestart", "--nocache" -Wait -PassThru
+        Write-Host "    installer exit code $($p.ExitCode)"
+        $Toolset = Get-ChildItem "$Vs\VC\Tools\MSVC" -Directory -Filter "14.42.*" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $Toolset) { throw "The MSVC 14.42 toolset isn't available; the InDesign SDK can't build without it" }
+    }
+    Write-Host "==> Using MSVC $($Toolset.Name) for the InDesign plug-in"
+    $MSBuild = & $VsWhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+    & $MSBuild "$Prj/GlyphClub.sdk.vcxproj" /nologo /m /p:Configuration=Release /p:Platform=x64 "/p:VCToolsVersion=$($Toolset.Name)" "/p:GlyphClubSrc=$Src" "/p:GlyphClubShared=$Shared" "/p:GlyphClubOut=$Out"
     if ($LASTEXITCODE -ne 0) { throw "Building the InDesign plug-in failed" }
 }

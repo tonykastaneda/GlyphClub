@@ -22,7 +22,9 @@ permissions:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    # windows-2022: Visual Studio 2022, which can add the 17.12 toolset the
+    # InDesign SDK needs (scripts/build-windows-plugin.ps1).
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
