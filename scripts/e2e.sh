@@ -111,7 +111,9 @@ check "export user fonts" test -d "$T/export/User-FontExport"
 
 print "==> Running app"
 cli activate "$FAM3" >/dev/null 2>&1   # a manual activation that must survive a restart
-"$APP" >"$T/app.log" 2>&1 &
+# --background: a quiet start (like login) stays in the menu bar, so the
+# tests don't pop a window up; E2E_VISUAL=1 shows it.
+if [[ $visual == 1 ]]; then "$APP" >"$T/app.log" 2>&1 & else "$APP" --background >"$T/app.log" 2>&1 & fi
 APP_PID=$!
 for i in {1..60}; do [[ -f "$DATA/bridge.json" ]] && cli app state >/dev/null 2>&1 && break; sleep 0.5; done
 st() { cli app state | j "$1"; }

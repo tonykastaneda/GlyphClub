@@ -54,7 +54,9 @@ bool ReadSession(Session& session)
 // working in Illustrator. False when there's no GlyphClub to launch.
 bool LaunchGlyphClub()
 {
-	const char* argv[] = {"/usr/bin/open", "-g", "-b", kGlyphClubAppBundleID, nullptr};
+	// --background: GlyphClub stays in the menu bar rather than opening its
+	// window (a GlyphClub without the menu bar on still opens it).
+	const char* argv[] = {"/usr/bin/open", "-g", "-b", kGlyphClubAppBundleID, "--args", "--background", nullptr};
 	pid_t pid = 0;
 	if (posix_spawn(&pid, argv[0], nullptr, nullptr, (char* const*) argv, environ) != 0) return false;
 	int status = 0;

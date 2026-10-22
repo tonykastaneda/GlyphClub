@@ -57,8 +57,15 @@ mod platform {
             .nth(3)
             .filter(|p| p.extension().is_some_and(|e| e == "app"));
         let arguments: Vec<String> = match app {
-            Some(app) => vec!["/usr/bin/open".into(), "-a".into(), app.to_string_lossy().into_owned()],
-            None => vec![exe.to_string_lossy().into_owned()],
+            // --background: a login start stays in the menu bar.
+            Some(app) => vec![
+                "/usr/bin/open".into(),
+                "-a".into(),
+                app.to_string_lossy().into_owned(),
+                "--args".into(),
+                "--background".into(),
+            ],
+            None => vec![exe.to_string_lossy().into_owned(), "--background".into()],
         };
         let arguments: String = arguments
             .iter()
@@ -109,7 +116,8 @@ mod platform {
                 "/t",
                 "REG_SZ",
                 "/d",
-                &format!("\"{}\"", exe.display()),
+                // --background: a login start stays in the tray.
+                &format!("\"{}\" --background", exe.display()),
                 "/f",
             ]);
         } else {

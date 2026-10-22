@@ -251,7 +251,10 @@ fn main() {
         });
 
         // Menu bar mode starts quietly, as just the icon.
-        let start_hidden = settings.menu_bar;
+        // Opening GlyphClub opens its window. Only a quiet start (login, or
+        // the Illustrator plug-in: --background) stays in the menu bar /
+        // tray while it lives there.
+        let start_hidden = settings.menu_bar && background;
         sync_tray(&settings, cx);
 
         let bounds = Bounds::centered(None, size(px(1440.), px(940.)), cx);
