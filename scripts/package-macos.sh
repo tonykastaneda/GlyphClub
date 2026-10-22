@@ -100,6 +100,12 @@ if [ ! -f "$DMG_PATH" ]; then
   hdiutil create -volname "$APP_NAME" -srcfolder "$STAGING" -ov -format UDZO "$DMG_PATH"
 fi
 
+# Sign the distribution container as well as the app it contains, so
+# Gatekeeper can validate the downloaded DMG itself.
+echo "==> Signing disk image"
+codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG_PATH"
+codesign --verify --strict --verbose=2 "$DMG_PATH"
+
 echo "==> Notarizing"
 if [ -n "${NOTARY_KEY_PATH:-}" ]; then
   xcrun notarytool submit "$DMG_PATH" \
