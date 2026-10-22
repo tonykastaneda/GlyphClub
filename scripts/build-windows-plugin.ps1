@@ -29,3 +29,27 @@ foreach ($Arch in @(@{ Name = "x64"; Platform = "x64" }, @{ Name = "arm64"; Plat
         if ($LASTEXITCODE -ne 0) { throw "Building the $($Arch.Name) Photoshop plug-in failed" }
     }
 }
+
+# The InDesign plug-in (plugin-indesign/), x64 only (the SDK has no ARM64
+# libraries), when its SDK is there: the SDK's own MSBuild setup, so the
+# project goes into its build\win\prj, which its property sheets expect.
+if ($env:ID_SDK) {
+    Write-Host "==> Building the x64 InDesign plug-in"
+    $Version = (Get-Content plugin-indesign/VERSION -Raw).Trim()
+    $Commas = ($Version.Split(".") + "0") -join ","
+    Set-Content plugin-indesign/Source/GCVersion.h @"
+// Written by scripts/build-windows-plugin.ps1 from plugin-indesign/VERSION.
+#define GLYPHCLUB_ID_VERSION "$Version"
+#define GLYPHCLUB_VERSION "$Version"
+#define GLYPHCLUB_ID_VERSION_COMMAS $Commas
+"@
+    $Prj = Join-Path $env:ID_SDK "build/win/prj"
+    Copy-Item plugin-indesign/win/GlyphClub.sdk.vcxproj "$Prj/GlyphClub.sdk.vcxproj" -Force
+    $Src = (Resolve-Path plugin-indesign/Source).Path
+    $Shared = (Resolve-Path plugin/Source).Path
+    $Out = Join-Path (Get-Location) "plugin-indesign/build-win-x64/Release/"
+    New-Item -ItemType Directory -Force -Path $Out | Out-Null
+    $MSBuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+    & $MSBuild "$Prj/GlyphClub.sdk.vcxproj" /nologo /m /p:Configuration=Release /p:Platform=x64 "/p:GlyphClubSrc=$Src" "/p:GlyphClubShared=$Shared" "/p:GlyphClubOut=$Out"
+    if ($LASTEXITCODE -ne 0) { throw "Building the InDesign plug-in failed" }
+}

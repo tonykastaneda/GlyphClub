@@ -10,7 +10,7 @@
 cd "$(dirname "$0")/.." || exit 1
 case "${1:-illustrator}" in
   indesign)
-    { find plugin-indesign/Source plugin-indesign/Resources plugin-indesign/Makefile plugin-indesign/VERSION -type f ! -path '*/Win/*'
+    { find plugin-indesign/Source plugin-indesign/Resources plugin-indesign/Makefile plugin-indesign/VERSION -type f ! -path '*/Win/*' ! -name '*.rc' ! -name 'GCVersion.h'
       ls plugin/Source/Bridge.h plugin/Source/Bridge.mm plugin/Source/Platform.h plugin/Source/PlatformMac.mm plugin/Source/GlyphClubID.h; } ;;
   *)
     find plugin/Source plugin/Resources plugin/Makefile plugin/VERSION -type f \

@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  GlyphClub's InDesign plug-in for Windows (x64): GlyphClub.pln plus its
+  "(GlyphClub Resources)" folder. The SDK's DocWatch.sdk.vcxproj, adapted:
+  scripts/build-windows-plugin.ps1 copies this into the SDK's build\win\prj
+  (its property sheets and option files use paths relative to there) and
+  builds it with
+    msbuild GlyphClub.sdk.vcxproj /p:Configuration=Release /p:Platform=x64
+      /p:GlyphClubSrc=<plugin-indesign\Source> /p:GlyphClubShared=<plugin\Source> /p:GlyphClubOut=<output folder\>
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectName>GlyphClub</ProjectName>
+    <ProjectGuid>{5B2C7D1E-3F4A-4C6B-9E8D-1A2B3C4D5E6F}</ProjectGuid>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="PropertySheets">
+    <Import Project="ReleaseX64.sdk.props" />
+  </ImportGroup>
+  <PropertyGroup>
+    <OutDir>$(GlyphClubOut)</OutDir>
+    <IntDir>.\..\objRx64\GlyphClub\</IntDir>
+    <TargetName>GlyphClub</TargetName>
+    <TargetExt>.pln</TargetExt>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalOptions>/vmg @SDKCPPOptions.rsp %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(GlyphClubSrc);$(GlyphClubShared);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_DEPRECATE;STRICT;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <StringPooling>true</StringPooling>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>VCPlugInHeaders.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile>$(IntDir)GlyphClub.pch</PrecompiledHeaderOutputFile>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_DEPRECATE;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <Culture>0x0409</Culture>
+      <AdditionalIncludeDirectories>$(GlyphClubSrc);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <PreLinkEvent>
+      <Command>merge_res.cmd "$(IntDir)"  GlyphClub &amp; echo Deleting old resources... &amp; del /f /s "$(TargetDir)($(TargetName) Resources)\"*.idrc &gt; $(IntDir)prevDeletedResources.txt &amp; xcopy /Q /E "$(IntDir)"*.idrc "$(TargetDir)($(TargetName) Resources)\" /Y</Command>
+    </PreLinkEvent>
+    <Link>
+      <AdditionalOptions>/IGNORE:4089 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalDependencies>$(MODEL_PLUGIN_LINKLIST);ws2_32.lib;shell32.lib;ole32.lib;advapi32.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
+      <ImportLibrary>$(IntDir)GlyphClub.lib</ImportLibrary>
+    </Link>
+    <PostBuildEvent>
+      <Command>restore_res.cmd "$(IntDir)"  GlyphClub</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="$(GlyphClubSrc)\GCID.cpp" />
+    <ClCompile Include="$(GlyphClubSrc)\GCNoStrip.cpp" />
+    <ClCompile Include="$(GlyphClubSrc)\GCMissingFontResponder.cpp" />
+    <ClCompile Include="$(GlyphClubSrc)\TriggerResourceDeps.cpp" />
+    <ClCompile Include="$(id_sdk_dir)\source\public\libs\publiclib\statics\PlugInStatics.cpp" />
+    <ClCompile Include="..\..\..\source\sdksamples\common\SDKPlugInEntrypoint.cpp" />
+    <ClCompile Include="$(id_sdk_dir)\source\precomp\msvc\VCPlugInHeaders.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+    </ClCompile>
+    <!-- The bridge to GlyphClub, shared with the other plug-ins: plain Win32, no SDK headers. -->
+    <ClCompile Include="$(GlyphClubShared)\BridgeWin.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>NOMINMAX;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Include="$(GlyphClubShared)\PlatformWin.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>NOMINMAX;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="$(GlyphClubSrc)\GlyphClub.fr">
+      <Command>odfrc $(ODFRC_ADDITIONAL_FLAGS) "%(FullPath)" -o "$(IntDir)%(Filename).fres" -i "$(GlyphClubSrc)" @SDKODFRCOptions.rsp
+</Command>
+      <AdditionalInputs>$(IntDir)TriggerResourceDeps.obj;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs>$(IntDir)%(Filename).fres;%(Outputs)</Outputs>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="$(GlyphClubSrc)\GlyphClub.rc" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

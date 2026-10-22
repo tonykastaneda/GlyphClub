@@ -16,3 +16,6 @@
 # InDesign plug-in builds
 /plugin-indesign/build
 /plugin-indesign/build-win-*
+
+# Written by scripts/build-windows-plugin.ps1
+/plugin-indesign/Source/GCVersion.h

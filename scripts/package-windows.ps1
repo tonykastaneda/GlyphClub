@@ -49,6 +49,16 @@ foreach ($Arch in "x64", "arm64") {
     } else {
         Write-Warning "No $Arch Illustrator plug-in at $Built; packaging without it"
     }
+    # InDesign's plug-in is the .pln and its "(GlyphClub Resources)" folder, x64 only.
+    $Built = "plugin-indesign/build-win-$Arch/Release/GlyphClub.pln"
+    if (Test-Path $Built) {
+        New-Item -ItemType Directory -Force -Path "$StageDir/plugins/$Arch" | Out-Null
+        Copy-Item $Built "$StageDir/plugins/$Arch/GlyphClub.pln"
+        Copy-Item -Recurse -Force "plugin-indesign/build-win-$Arch/Release/(GlyphClub Resources)" "$StageDir/plugins/$Arch/"
+        Write-Host "==> Included the $Arch InDesign plug-in"
+    } elseif ($env:REQUIRE_PLUGIN -and $Arch -eq "x64") {
+        throw "Missing $Built (build it with scripts/build-windows-plugin.ps1)"
+    }
     $Built = "plugin-photoshop/build-win-$Arch/Release/GlyphClub.8li"
     if (Test-Path $Built) {
         New-Item -ItemType Directory -Force -Path "$StageDir/plugins/$Arch" | Out-Null

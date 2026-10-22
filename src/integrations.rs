@@ -401,13 +401,40 @@ mod win {
         arm.ok_or_else(|| format!("This GlyphClub doesn't include the plug-in for ARM64 {}.", app.name()))
     }
 
+    /// InDesign's Windows plug-in is the .pln and this folder of compiled
+    /// resources beside it.
+    const INDESIGN_RESOURCES: &str = "(GlyphClub Resources)";
+
+    fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            let target = to.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                copy_dir(&entry.path(), &target)?;
+            } else {
+                std::fs::copy(entry.path(), target)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Copies the plug-in into `plugins_dir`, replacing any older copy.
     /// Blocks (including on the UAC prompt), so call it off the main thread.
     pub fn install(app: HostApp, source: &Path, plugins_dir: &Path) -> Result<(), String> {
         let source = plugin_for(app, source, plugins_dir)?;
         let dest = plugins_dir.join(app.plugin_name());
+        let resources = (app == HostApp::InDesign).then(|| {
+            let from = source.with_file_name(INDESIGN_RESOURCES);
+            (from, plugins_dir.join(INDESIGN_RESOURCES))
+        });
         if writable(plugins_dir) {
-            return std::fs::copy(&source, &dest).map(|_| ()).map_err(|e| in_use_hint(app, &e.to_string()));
+            std::fs::copy(&source, &dest).map_err(|e| in_use_hint(app, &e.to_string()))?;
+            if let Some((from, to)) = &resources {
+                let _ = std::fs::remove_dir_all(to);
+                copy_dir(from, to).map_err(|e| in_use_hint(app, &e.to_string()))?;
+            }
+            return Ok(());
         }
         // The elevated copy runs as an administrator, who may not see this
         // user's folders the same way: stage the file in the temp folder.
@@ -416,7 +443,17 @@ mod win {
         std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
         let staged = stage.join(app.plugin_name());
         std::fs::copy(&source, &staged).map_err(|e| e.to_string())?;
-        let result = run_elevated(&stage, &format!("copy /Y \"{}\" \"{}\"", staged.display(), dest.display()));
+        let mut command = format!("copy /Y \"{}\" \"{}\"", staged.display(), dest.display());
+        if let Some((from, to)) = &resources {
+            let staged_resources = stage.join(INDESIGN_RESOURCES);
+            copy_dir(from, &staged_resources).map_err(|e| e.to_string())?;
+            command.push_str(&format!(
+                " && (if exist \"{to}\" rmdir /S /Q \"{to}\") && xcopy /E /I /Y /Q \"{from}\" \"{to}\"",
+                from = staged_resources.display(),
+                to = to.display()
+            ));
+        }
+        let result = run_elevated(&stage, &command);
         let same = std::fs::read(&dest).ok() == std::fs::read(&staged).ok();
         let _ = std::fs::remove_dir_all(&stage);
         result?;
@@ -429,12 +466,21 @@ mod win {
 
     pub fn uninstall(app: HostApp, plugins_dir: &Path) -> Result<(), String> {
         let dest = plugins_dir.join(app.plugin_name());
+        let resources = (app == HostApp::InDesign).then(|| plugins_dir.join(INDESIGN_RESOURCES));
         if writable(plugins_dir) {
-            return std::fs::remove_file(&dest).map_err(|e| in_use_hint(app, &e.to_string()));
+            std::fs::remove_file(&dest).map_err(|e| in_use_hint(app, &e.to_string()))?;
+            if let Some(dir) = &resources {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+            return Ok(());
         }
         let stage = std::env::temp_dir().join(format!("glyphclub-plugin-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&stage);
-        let result = run_elevated(&stage, &format!("del /F /Q \"{}\"", dest.display()));
+        let mut command = format!("del /F /Q \"{}\"", dest.display());
+        if let Some(dir) = &resources {
+            command.push_str(&format!(" & (if exist \"{0}\" rmdir /S /Q \"{0}\")", dir.display()));
+        }
+        let result = run_elevated(&stage, &command);
         let _ = std::fs::remove_dir_all(&stage);
         result?;
         if dest.exists() {

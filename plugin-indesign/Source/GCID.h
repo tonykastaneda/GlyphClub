@@ -16,6 +16,13 @@
 #define kGCPrefix			RezLong(kGCPrefixNumber)
 #define kGCStringPrefix		SDK_DEF_STRINGIZE(kGCPrefixNumber)
 
+// Windows builds get the version from GCVersion.h, written by
+// scripts/build-windows-plugin.ps1; macOS passes it on the command line.
+#if !defined(GLYPHCLUB_ID_VERSION) && defined(__has_include)
+#if __has_include("GCVersion.h")
+#include "GCVersion.h"
+#endif
+#endif
 #ifndef GLYPHCLUB_ID_VERSION
 #define GLYPHCLUB_ID_VERSION "dev"
 #endif
