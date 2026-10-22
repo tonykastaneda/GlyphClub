@@ -225,6 +225,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn installs_and_uninstalls_into_a_writable_folder() {
         let source = tempfile::tempdir().unwrap();
