@@ -39,7 +39,8 @@ pub struct ActivateOutcome {
 }
 
 pub enum BridgeEvent {
-    PluginVersionSeen(String),
+    /// (the version the plug-in reported, the version this GlyphClub ships)
+    PluginVersionSeen(String, Option<String>),
     OpenIntegrations,
     Show,
     Activate {
@@ -70,6 +71,9 @@ pub fn session_path() -> PathBuf {
 /// session file can't be set up, GlyphClub still runs normally; the plug-in
 /// just reports that it can't reach the app.
 pub fn start(events: mpsc::Sender<BridgeEvent>) {
+    std::thread::spawn(|| {
+        let _ = latest_plugin_version();
+    });
     let Ok(listener) = TcpListener::bind(("127.0.0.1", 0)) else {
         return;
     };
@@ -197,7 +201,7 @@ fn handle(line: &str, token: &str, events: &mpsc::Sender<BridgeEvent>) -> Value 
         return error("bad token");
     }
     if let Some(version) = request.get("pluginVersion").and_then(Value::as_str) {
-        let _ = events.send(BridgeEvent::PluginVersionSeen(version.to_string()));
+        let _ = events.send(BridgeEvent::PluginVersionSeen(version.to_string(), latest_plugin_version()));
     }
     let mut reply = handle_method(&request, events);
     if let (Some(object), Some(latest)) = (reply.as_object_mut(), latest_plugin_version()) {
@@ -206,10 +210,18 @@ fn handle(line: &str, token: &str, events: &mpsc::Sender<BridgeEvent>) -> Value 
     reply
 }
 
+/// The plug-in version this GlyphClub ships. Read from disk once (it can
+/// touch a protected folder and wait on a macOS permission prompt), on the
+/// bridge's own threads: `start` warms it in the background.
 pub fn latest_plugin_version() -> Option<String> {
-    glyphclub::integrations::bundled_plugin()
-        .and_then(|bundle| glyphclub::integrations::plugin_version(&bundle))
-        .filter(|v| !v.is_empty())
+    static LATEST: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    LATEST
+        .get_or_init(|| {
+            glyphclub::integrations::bundled_plugin()
+                .and_then(|bundle| glyphclub::integrations::plugin_version(&bundle))
+                .filter(|v| !v.is_empty())
+        })
+        .clone()
 }
 
 fn handle_method(request: &Value, events: &mpsc::Sender<BridgeEvent>) -> Value {
