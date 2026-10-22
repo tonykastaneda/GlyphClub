@@ -11,7 +11,14 @@ use anyhow::{Context, Result};
 /// wide, since splitting a single face out of a collection into its own
 /// font file isn't something we do (it would need a font-subsetting step).
 pub fn install(source: &Path, unique_name: &str) -> Result<PathBuf> {
-    platform::install(source, unique_name)
+    let installed = platform::install(source, unique_name)?;
+    // Copies keep the source's dates; stamp this one with now so the
+    // orphan sweep (`installed_files`) can tell a fresh copy from an old one.
+    let _ = std::fs::File::options()
+        .write(true)
+        .open(&installed)
+        .and_then(|file| file.set_modified(std::time::SystemTime::now()));
+    Ok(installed)
 }
 
 /// Removes a previously installed font. `installed` is the path returned by
@@ -30,6 +37,24 @@ pub const MANAGED_DIR_NAME: &str = "glyphclub";
 /// Font Book / Windows' own "Install" puts a font by default.
 pub fn user_font_dir() -> Option<PathBuf> {
     platform::user_font_dir()
+}
+
+/// The font copies in GlyphClub's own activation folder.
+pub fn installed_files() -> Vec<PathBuf> {
+    let Some(dir) = platform::user_font_dir().map(|d| d.join(MANAGED_DIR_NAME)) else {
+        return Vec::new();
+    };
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("glyphclub-"))
+        })
+        .collect()
 }
 
 fn managed_dir() -> Result<PathBuf> {

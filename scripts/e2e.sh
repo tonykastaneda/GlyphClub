@@ -65,8 +65,12 @@ cp assets/icon-fonts/typicons/font.ttf "$LIB/typicons.ttf"
 cp assets/icon-fonts/open-iconic/font.ttf "$LIB/open-iconic.ttf"
 cp assets/icon-fonts/weather-icons/font.ttf "$LIB/weather-icons.ttf"
 
+# A copy left in the activation folder by an older catalog, dated a while ago.
+mkdir -p "$UFONTS" && cp "$LIB/typicons.ttf" "$UFONTS/glyphclub-99999.ttf" && touch -t 202001010000 "$UFONTS/glyphclub-99999.ttf"
+
 print "==> Catalog and CLI"
 check "status runs" cli status
+check "orphaned activation copy removed" test ! -e "$UFONTS/glyphclub-99999.ttf"
 out=$(cli add "$LIB" 2>&1); [[ $out == *indexed* ]] && ok "add library" || bad "add library" "$out"
 n=$(cli --json libraries | j "[l['fonts'] for l in d['libraries'] if l['name']=='E2E Library'][0]" 2>/dev/null)
 [[ $n == 3 ]] && ok "library lists 3 fonts" || bad "library lists 3 fonts" "got $n"
@@ -114,6 +118,7 @@ st() { cli app state | j "$1"; }
 check "app answers over the bridge" cli app state
 [[ $(st "d['visibleCount'] > 0") == True ]] && ok "app shows fonts" || bad "app shows fonts"
 check "manual activation survived a restart" sh -c "\"$CLI_BIN\" --json list --active --library 'E2E Library' | grep -q \"$FAM3\""
+check "active font's copy kept by the orphan sweep" sh -c "ls \"$UFONTS\" | grep -q '^glyphclub-'"
 
 cli app nav library "E2E Library" >/dev/null 2>&1
 [[ $(st "d['visibleCount']") == 3 ]] && ok "nav to a library" || bad "nav to a library" "$(st "d['visibleCount']")"

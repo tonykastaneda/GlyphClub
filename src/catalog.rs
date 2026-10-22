@@ -126,6 +126,8 @@ impl Catalog {
             }
         }
 
+        remove_orphaned_copies(&store);
+
         let mut watcher = new_debouncer(
             Duration::from_millis(800),
             move |res: notify_debouncer_mini::DebounceEventResult| {
@@ -511,3 +513,27 @@ impl Catalog {
         Ok(std::fs::read(path)?)
     }
 }
+
+/// Removes font copies in the activation folder that no activation points
+/// to, e.g. after the catalog was reset while fonts were active. Otherwise
+/// they'd stay active everywhere with no way to turn them off in GlyphClub.
+/// Copies from the last minute are left alone: another GlyphClub process
+/// (the app or the CLI) may be about to record them.
+fn remove_orphaned_copies(store: &Store) {
+    let Ok(activations) = store.activations() else {
+        return;
+    };
+    let known: HashSet<PathBuf> = activations.into_iter().map(|(_, path)| PathBuf::from(path)).collect();
+    for file in activate::installed_files() {
+        // `activate::install` stamps each copy's modified time.
+        let recent = std::fs::metadata(&file)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_none_or(|age| age < Duration::from_secs(60));
+        if !known.contains(&file) && !recent {
+            let _ = activate::uninstall(&file);
+        }
+    }
+}
+
