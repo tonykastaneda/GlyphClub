@@ -3,6 +3,7 @@ name = "glyphclub"
 version = "0.2.0"
 edition = "2021"
 default-run = "GlyphClub"
+autobins = false
 
 # The GPUI application is the standard executable on both platforms.
 [[bin]]
