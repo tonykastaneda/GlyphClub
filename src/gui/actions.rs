@@ -60,37 +60,54 @@ actions!(
 /// Key context of the main window's root element.
 pub const CONTEXT: &str = "GlyphClub";
 
+/// Shortcuts are written with macOS's cmd; on Windows that's ctrl (gpui's
+/// cmd there is the Windows key, which the menus showed as Win+O).
+fn keys(mac: &str) -> String {
+    if cfg!(target_os = "macos") {
+        mac.to_string()
+    } else {
+        mac.replace("cmd", "ctrl")
+    }
+}
+
 pub fn bind_keys(cx: &mut App) {
     let c = Some(CONTEXT);
+    if cfg!(target_os = "macos") {
+        cx.bind_keys([
+            KeyBinding::new("cmd-h", HideApp, None),
+            KeyBinding::new("alt-cmd-h", HideOthers, None),
+            KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
+        ]);
+    } else {
+        cx.bind_keys([KeyBinding::new("f11", ToggleFullScreen, None)]);
+    }
+    let k = |s: &str| keys(s);
     cx.bind_keys([
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-h", HideApp, None),
-        KeyBinding::new("alt-cmd-h", HideOthers, None),
-        KeyBinding::new("cmd-,", OpenSettings, None),
-        KeyBinding::new("cmd-o", AddLibrary, None),
-        KeyBinding::new("cmd-w", CloseWindow, None),
-        KeyBinding::new("cmd-m", Minimize, None),
-        KeyBinding::new("cmd-f", Find, c),
-        KeyBinding::new("cmd-a", SelectAll, c),
+        KeyBinding::new(&k("cmd-q"), Quit, None),
+        KeyBinding::new(&k("cmd-,"), OpenSettings, None),
+        KeyBinding::new(&k("cmd-o"), AddLibrary, None),
+        KeyBinding::new(&k("cmd-w"), CloseWindow, None),
+        KeyBinding::new(&k("cmd-m"), Minimize, None),
+        KeyBinding::new(&k("cmd-f"), Find, c),
+        KeyBinding::new(&k("cmd-a"), SelectAll, c),
         KeyBinding::new("escape", ClearSelection, c),
-        KeyBinding::new("cmd-1", ViewGrid, c),
-        KeyBinding::new("cmd-2", ViewList, c),
-        KeyBinding::new("cmd-i", ToggleInfo, c),
-        KeyBinding::new("cmd-alt-s", ToggleSidebar, c),
-        KeyBinding::new("cmd-t", ToggleSampleBar, c),
-        KeyBinding::new("cmd-=", ZoomIn, c),
-        KeyBinding::new("cmd-+", ZoomIn, c),
-        KeyBinding::new("cmd--", ZoomOut, c),
-        KeyBinding::new("cmd-r", Activate, c),
-        KeyBinding::new("alt-cmd-r", ActivateTemporarily, c),
-        KeyBinding::new("shift-cmd-r", Deactivate, c),
-        KeyBinding::new("cmd-g", ExpandFamilies, c),
-        KeyBinding::new("cmd-e", EditPreviewText, c),
-        KeyBinding::new("cmd-d", ToggleDarkMode, None),
-        KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
-        KeyBinding::new("shift-cmd-c", CopyFontName, c),
-        KeyBinding::new("cmd-backspace", DeleteSelected, c),
-        KeyBinding::new("shift-cmd-f", RevealSelected, c),
+        KeyBinding::new(&k("cmd-1"), ViewGrid, c),
+        KeyBinding::new(&k("cmd-2"), ViewList, c),
+        KeyBinding::new(&k("cmd-i"), ToggleInfo, c),
+        KeyBinding::new(&k("cmd-alt-s"), ToggleSidebar, c),
+        KeyBinding::new(&k("cmd-t"), ToggleSampleBar, c),
+        KeyBinding::new(&k("cmd-="), ZoomIn, c),
+        KeyBinding::new(&k("cmd-+"), ZoomIn, c),
+        KeyBinding::new(&k("cmd--"), ZoomOut, c),
+        KeyBinding::new(&k("cmd-r"), Activate, c),
+        KeyBinding::new(&k("alt-cmd-r"), ActivateTemporarily, c),
+        KeyBinding::new(&k("shift-cmd-r"), Deactivate, c),
+        KeyBinding::new(&k("cmd-g"), ExpandFamilies, c),
+        KeyBinding::new(&k("cmd-e"), EditPreviewText, c),
+        KeyBinding::new(&k("cmd-d"), ToggleDarkMode, None),
+        KeyBinding::new(&k("shift-cmd-c"), CopyFontName, c),
+        KeyBinding::new(&k("cmd-backspace"), DeleteSelected, c),
+        KeyBinding::new(&k("shift-cmd-f"), RevealSelected, c),
     ]);
 }
 
