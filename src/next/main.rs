@@ -1,6 +1,8 @@
 //! GlyphClub's main GPUI application. The catalog, scanning, activation
 //! and OS integrations are the shared core in `src/lib.rs`.
 
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod actions;
 mod app;
 mod bridge;
