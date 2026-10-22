@@ -233,6 +233,8 @@ impl GlyphClub {
             other => return Err(format!("unknown command “{other}”. Commands: {HELP}")),
         }
         cx.notify();
+        self.sync_view_state(window);
+        self.apply_appearance(window, cx);
         Ok(self.ui_state(window, cx))
     }
 

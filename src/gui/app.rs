@@ -1118,7 +1118,18 @@ impl GlyphClub {
         .detach();
     }
 
-    fn apply_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Narrow-window compact mode and whether the sidebar is on screen.
+    /// Recomputed on every render, and after remote commands, so it stays
+    /// right even while the window isn't drawing (hidden or minimized).
+    pub(crate) fn sync_view_state(&mut self, window: &Window) {
+        self.compact = f32::from(window.viewport_size().width) < COMPACT_W;
+        if !self.compact {
+            self.sidebar_forced = false;
+        }
+        self.sidebar_shown = self.sidebar_open && (!self.compact || self.sidebar_forced);
+    }
+
+    pub(crate) fn apply_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let appearance = cx.global::<AppSettings>().0.appearance;
         let system_dark = matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark);
         if self.applied_appearance == Some((appearance, system_dark)) {
@@ -1286,9 +1297,11 @@ impl GlyphClub {
             }))
             .on_action(cx.listener(|this, _: &ToggleDarkMode, window, cx| {
                 let dark = cx.theme().mode.is_dark();
-                let _ = window;
                 this.update_settings(cx, |s| s.appearance = if dark { Appearance::Light } else { Appearance::Dark });
+                // Applied now, not on the next render: the window may not be
+                // drawing (hidden in the menu bar, minimized).
                 this.applied_appearance = None;
+                this.apply_appearance(window, cx);
             }))
             .on_action(cx.listener(|_, _: &ToggleFullScreen, window, _| window.toggle_fullscreen()))
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
@@ -1309,11 +1322,7 @@ impl Render for GlyphClub {
         let pal = Palette::get(cx);
         let settings = cx.global::<AppSettings>().0;
         self.expand_all = settings.expand_families;
-        self.compact = f32::from(window.viewport_size().width) < COMPACT_W;
-        if !self.compact {
-            self.sidebar_forced = false;
-        }
-        self.sidebar_shown = self.sidebar_open && (!self.compact || self.sidebar_forced);
+        self.sync_view_state(window);
 
         let content = if self.nav == Nav::AllIcons {
             self.render_all_icons(&pal, window, cx)
