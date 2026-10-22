@@ -12,7 +12,7 @@ use crate::settings::{AppSettings, Appearance, SortField, ViewMode};
 pub const HELP: &str = "state | view grid|list | nav all|system|starred|recents|library <name>|tag <name>|icons <set> | \
 select <family>… | deselect | info open|close | tab preview|sizes|glyphs|features|info | face <style> | \
 sample <text> | size <n> | search <text> | sort <field> [asc|desc] | expand on|off | sidebar show|hide | \
-theme light|dark|system | window <w> <h> | settings general|sidebar|import|auto | action <name> | scroll top|<row> | illustrator-apply <family> | \
+theme light|dark|system | window <w> <h> | settings general|sidebar|import|auto | action <name> | scroll top|<row> | drop-preview on|off|flash | illustrator-apply <family> | \
 icon-copy <set> <icon> [vectors|svg]";
 
 impl GlyphClub {
@@ -222,6 +222,27 @@ impl GlyphClub {
                 let name = if arg(0).contains("::") { arg(0).to_string() } else { format!("glyphclub::{}", arg(0)) };
                 let action = cx.build_action(&name, None).map_err(|e| format!("action {name}: {e}"))?;
                 window.dispatch_action(action, cx);
+            }
+            // The drag-over overlay without a drag, for screenshots.
+            "drop-preview" => {
+                self.drops += 1;
+                match arg(0) {
+                    "on" => {
+                        self.drop_preview = true;
+                        self.drop_hover = Some(self.drops);
+                    }
+                    "flash" => {
+                        self.drop_preview = false;
+                        self.drop_hover = None;
+                        self.drop_flash = Some(self.drops);
+                    }
+                    _ => {
+                        self.drop_preview = false;
+                        self.drop_hover = None;
+                        self.drop_flash = None;
+                    }
+                }
+                cx.notify();
             }
             "scroll" => {
                 let pos = match arg(0) {

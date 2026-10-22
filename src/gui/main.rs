@@ -8,6 +8,7 @@ mod app;
 mod bridge;
 mod chrome;
 mod detail;
+mod drop_overlay;
 mod fit;
 mod grid;
 mod icon_view;
@@ -42,6 +43,17 @@ struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        // The drag-over cards (src/gui/drop_overlay.rs).
+        let drop_card: Option<&'static [u8]> = match path {
+            "drop/otf-dark.svg" => Some(include_bytes!("../../assets/drop/otf-dark.svg")),
+            "drop/otf-light.svg" => Some(include_bytes!("../../assets/drop/otf-light.svg")),
+            "drop/ttf-dark.svg" => Some(include_bytes!("../../assets/drop/ttf-dark.svg")),
+            "drop/ttf-light.svg" => Some(include_bytes!("../../assets/drop/ttf-light.svg")),
+            _ => None,
+        };
+        if let Some(bytes) = drop_card {
+            return Ok(Some(Cow::Borrowed(bytes)));
+        }
         if path == "branding/icon.png" {
             return Ok(Some(Cow::Borrowed(include_bytes!(
                 "../../branding/glyphicon-macOS-Default-1024@1x.png"

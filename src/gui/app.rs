@@ -75,6 +75,16 @@ pub struct GlyphClub {
     pub recent_notices: Vec<(SharedString, bool)>,
     pub update_available: Option<String>,
     pub dismissed_update: bool,
+    /// While font files are dragged over the window: which drag this is
+    /// (a new number each time, so the cards fan out again). See
+    /// `drop_overlay`.
+    pub drop_hover: Option<u64>,
+    /// The flash after a drop, by the same numbering.
+    pub drop_flash: Option<u64>,
+    pub drops: u64,
+    /// glyphclub-cli's `drop-preview on`: shows the drag-over overlay with
+    /// no drag, for screenshots.
+    pub drop_preview: bool,
     /// Families expanded into their faces in the list view, by key.
     pub expanded: HashSet<SharedString>,
     pub sample: Entity<InputState>,
@@ -234,6 +244,10 @@ impl GlyphClub {
             recent_notices: Vec::new(),
             update_available: None,
             dismissed_update: false,
+            drop_hover: None,
+            drop_flash: None,
+            drops: 0,
+            drop_preview: false,
             expanded: HashSet::new(),
             sample,
             search,
@@ -1353,6 +1367,11 @@ impl Render for GlyphClub {
         let settings = cx.global::<AppSettings>().0;
         self.expand_all = settings.expand_families;
         self.sync_view_state(window);
+        // The drag left the window (or was cancelled): gpui ends it.
+        if self.drop_hover.is_some() && !cx.has_active_drag() && !self.drop_preview {
+            self.drop_hover = None;
+        }
+        let dark_theme = gpui_kit::component::ActiveTheme::theme(&**cx).mode.is_dark();
 
         let content = if self.nav == Nav::AllIcons {
             self.render_all_icons(&pal, window, cx)
@@ -1405,7 +1424,27 @@ impl Render for GlyphClub {
                 }
             }))
             .when(self.resizing_sidebar || self.resizing_detail, |d| d.cursor_col_resize())
+            .on_drag_move(cx.listener(|this, _: &DragMoveEvent<ExternalPaths>, _, cx| {
+                if this.drop_hover.is_none() {
+                    this.drops += 1;
+                    this.drop_hover = Some(this.drops);
+                    cx.notify();
+                }
+            }))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.drop_hover = None;
+                this.drop_flash = Some(this.drops);
+                let flash = this.drops;
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(std::time::Duration::from_millis(400)).await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.drop_flash == Some(flash) {
+                            this.drop_flash = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
                 // Folders become libraries; font files go into a library you
                 // pick.
                 let mut fonts = Vec::new();
@@ -1432,7 +1471,11 @@ impl Render for GlyphClub {
                     .child(self.toolbar(&pal, cx))
                     .when_some(self.update_banner(&pal, cx), |d, b| d.child(b))
                     .child(div().flex_1().min_h_0().child(content))
-                    .when(settings.show_sample_bar && !matches!(self.nav, Nav::Icons(_) | Nav::AllIcons), |d| d.child(self.sample_bar(&pal, cx))),
+                    .when(settings.show_sample_bar && !matches!(self.nav, Nav::Icons(_) | Nav::AllIcons), |d| d.child(self.sample_bar(&pal, cx)))
+                    .when_some(self.drop_hover, |d, hover| {
+                        d.child(crate::drop_overlay::drop_hover(hover, dark_theme, &pal))
+                    })
+                    .when_some(self.drop_flash, |d, flash| d.child(crate::drop_overlay::drop_flash(flash, &pal))),
             )
             .when(self.info_open, |d| d.child(self.render_detail(&pal, window, cx)));
 
