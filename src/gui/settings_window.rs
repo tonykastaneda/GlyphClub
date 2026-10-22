@@ -105,6 +105,8 @@ pub struct SettingsView {
     installs: Vec<IllustratorInstall>,
     bundled: Option<PathBuf>,
     bundled_version: Option<String>,
+    /// Checked when the page refreshes, not on every redraw (it runs pgrep).
+    illustrator_running: bool,
     status: Option<(SharedString, bool)>,
     busy: bool,
     _observe: Subscription,
@@ -117,6 +119,7 @@ impl SettingsView {
             installs: Vec::new(),
             bundled: None,
             bundled_version: None,
+            illustrator_running: false,
             status: None,
             busy: false,
             _observe: cx.observe_global::<AppSettings>(|_, cx| cx.notify()),
@@ -134,6 +137,7 @@ impl SettingsView {
     }
 
     fn refresh_installs(&mut self) {
+        self.illustrator_running = integrations::illustrator_running();
         self.installs = integrations::find_illustrators();
         self.bundled = integrations::bundled_plugin();
         self.bundled_version = self.bundled.as_deref().and_then(integrations::plugin_version);
@@ -387,7 +391,7 @@ impl SettingsView {
                     .text_color(pal.text_dim)
                     .child("Automatically activates missing fonts when documents open in Illustrator, through the GlyphClub plug-in."),
             )
-            .when(integrations::illustrator_running(), |d| {
+            .when(self.illustrator_running, |d| {
                 d.child(
                     div()
                         .text_size(px(11.))
