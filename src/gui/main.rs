@@ -98,6 +98,8 @@ fn apply_settings_change(before: &Settings, after: &Settings, cx: &mut App) {
 }
 
 fn show_main_window(cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    set_in_dock(true);
     cx.activate(true);
     if let Some(handle) = cx.try_global::<MainWindow>().map(|m| m.0) {
         let _ = handle.update(cx, |_, window, _| {
@@ -116,8 +118,9 @@ fn in_tray(cx: &App) -> bool {
 }
 
 /// Puts GlyphClub away in the menu bar / system tray, still running:
-/// macOS hides the app; Windows hides the main window (gpui's app-level
-/// hide does nothing there).
+/// macOS hides the app and takes it out of the Dock; Windows hides the main
+/// window, which takes it off the taskbar (gpui's app-level hide does
+/// nothing there).
 fn hide_to_tray(window: &mut Window, cx: &mut App) {
     #[cfg(windows)]
     {
@@ -128,7 +131,31 @@ fn hide_to_tray(window: &mut Window, cx: &mut App) {
     {
         let _ = window;
         cx.hide();
+        #[cfg(target_os = "macos")]
+        set_in_dock(false);
     }
+}
+
+/// macOS: whether GlyphClub has a Dock icon (a regular app) or lives only
+/// in the menu bar (an accessory app).
+#[cfg(target_os = "macos")]
+pub(crate) fn set_in_dock(shown: bool) {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let policy = if shown { NSApplicationActivationPolicy::Regular } else { NSApplicationActivationPolicy::Accessory };
+    NSApplication::sharedApplication(mtm).setActivationPolicy(policy);
+}
+
+/// Cmd-W / Cmd-Q on the main window while GlyphClub lives in the menu bar
+/// or tray: put it away there. Deferred, because the shortcut arrives while
+/// the window is still handling the key press and can't be updated yet.
+fn put_away_main_window(cx: &mut App) {
+    cx.defer(|cx| {
+        if let Some(handle) = cx.try_global::<MainWindow>().map(|m| m.0) {
+            let _ = handle.update(cx, |_, window, cx| hide_to_tray(window, cx));
+        }
+    });
 }
 
 #[cfg(windows)]
@@ -202,23 +229,25 @@ fn main() {
             if !in_tray(cx) {
                 return cx.quit();
             }
-            // Deferred: Quit arrives while the window is still handling the
-            // key press, when it can't be updated yet.
-            cx.defer(|cx| {
-                if let Some(handle) = cx.try_global::<MainWindow>().map(|m| m.0) {
-                    let _ = handle.update(cx, |_, window, cx| hide_to_tray(window, cx));
-                }
-            });
+            put_away_main_window(cx);
         });
         cx.on_action(|_: &HideApp, cx| cx.hide());
         cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
         cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
         cx.on_action(|_: &OpenSettings, cx| settings_window::open(None, cx));
         cx.on_action(|_: &OpenGitHub, cx| cx.open_url(update::REPO_URL));
+        // Cmd-W: the main window goes away to the menu bar / tray while
+        // GlyphClub lives there (otherwise closing it quits, as before); any
+        // other window (Settings) just closes. Deferred like Quit.
         cx.on_action(|_: &CloseWindow, cx| {
-            if let Some(window) = cx.active_window() {
-                let _ = window.update(cx, |_, window, _| window.remove_window());
+            let Some(active) = cx.active_window() else { return };
+            let main = cx.try_global::<MainWindow>().map(|m| m.0);
+            if main.is_some_and(|m| m.window_id() == active.window_id()) && in_tray(cx) {
+                return put_away_main_window(cx);
             }
+            cx.defer(move |cx| {
+                let _ = active.update(cx, |_, window, _| window.remove_window());
+            });
         });
 
         // Menu bar mode starts quietly, as just the icon.
@@ -328,6 +357,11 @@ fn main() {
 
         if !start_hidden && !background {
             cx.activate(true);
+        }
+        // Menu bar mode starts with no Dock icon either.
+        #[cfg(target_os = "macos")]
+        if start_hidden {
+            set_in_dock(false);
         }
     });
 }

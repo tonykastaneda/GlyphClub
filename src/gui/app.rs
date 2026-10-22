@@ -1049,10 +1049,14 @@ impl GlyphClub {
                 // tray's Open does.
                 #[cfg(windows)]
                 crate::set_window_shown(window, true);
+                #[cfg(target_os = "macos")]
+                crate::set_in_dock(true);
                 cx.activate(true);
                 window.activate_window();
             }
             BridgeEvent::OpenIntegrations => {
+                #[cfg(target_os = "macos")]
+                crate::set_in_dock(true);
                 cx.activate(true);
                 crate::settings_window::open(Some(crate::settings_window::Page::AutoActivation), cx);
             }

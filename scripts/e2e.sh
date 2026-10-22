@@ -181,6 +181,12 @@ cli app action Quit >/dev/null 2>&1
 sleep 1
 if [[ $menu_bar == true ]]; then
   kill -0 $APP_PID 2>/dev/null && ok "Cmd-Q keeps it running in the menu bar" || bad "Cmd-Q keeps it running in the menu bar"
+  # Put away in the menu bar means no Dock icon either ("UIElement").
+  dock_type() { lsappinfo info -only ApplicationType -app "$(lsappinfo find pid=$APP_PID)" 2>/dev/null; }
+  [[ $(dock_type) == *UIElement* ]] && ok "Cmd-Q takes it out of the Dock" || bad "Cmd-Q takes it out of the Dock" "$(dock_type)"
+  cli app action CloseWindow >/dev/null 2>&1
+  sleep 1
+  kill -0 $APP_PID 2>/dev/null && ok "Cmd-W keeps it running in the menu bar" || bad "Cmd-W keeps it running in the menu bar"
 fi
 cli app action QuitCompletely >/dev/null 2>&1
 for i in {1..20}; do kill -0 $APP_PID 2>/dev/null || break; sleep 0.5; done
