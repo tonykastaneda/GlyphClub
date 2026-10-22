@@ -1044,6 +1044,11 @@ impl GlyphClub {
                 let _ = reply.send(outcome);
             }
             BridgeEvent::Show => {
+                // A second launch (e.g. the Start menu shortcut) while the
+                // window is hidden in the tray brings it back, like the
+                // tray's Open does.
+                #[cfg(windows)]
+                crate::set_window_shown(window, true);
                 cx.activate(true);
                 window.activate_window();
             }

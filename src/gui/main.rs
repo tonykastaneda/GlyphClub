@@ -132,7 +132,7 @@ fn hide_to_tray(window: &mut Window, cx: &mut App) {
 }
 
 #[cfg(windows)]
-fn set_window_shown(window: &Window, shown: bool) {
+pub(crate) fn set_window_shown(window: &Window, shown: bool) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOW};
