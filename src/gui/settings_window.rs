@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use glyphclub::integrations::{self, IllustratorInstall};
+use glyphclub::integrations::{self, AppInstall, HostApp};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants, DropdownButton};
 use gpui_kit::component::checkbox::Checkbox;
@@ -102,11 +102,12 @@ pub fn open(page: Option<Page>, cx: &mut App) {
 
 pub struct SettingsView {
     page: Page,
-    installs: Vec<IllustratorInstall>,
-    bundled: Option<PathBuf>,
-    bundled_version: Option<String>,
-    /// Checked when the page refreshes, not on every redraw (it runs pgrep).
-    illustrator_running: bool,
+    installs: Vec<AppInstall>,
+    /// Each app's plug-in in this build, with its version.
+    bundled: std::collections::HashMap<HostApp, (PathBuf, Option<String>)>,
+    /// Apps that are open, checked when the page refreshes (not on every
+    /// redraw: it runs pgrep / tasklist).
+    running: Vec<HostApp>,
     status: Option<(SharedString, bool)>,
     busy: bool,
     _observe: Subscription,
@@ -117,9 +118,8 @@ impl SettingsView {
         let mut this = Self {
             page,
             installs: Vec::new(),
-            bundled: None,
-            bundled_version: None,
-            illustrator_running: false,
+            bundled: Default::default(),
+            running: Vec::new(),
             status: None,
             busy: false,
             _observe: cx.observe_global::<AppSettings>(|_, cx| cx.notify()),
@@ -137,10 +137,17 @@ impl SettingsView {
     }
 
     fn refresh_installs(&mut self) {
-        self.illustrator_running = integrations::illustrator_running();
-        self.installs = integrations::find_illustrators();
-        self.bundled = integrations::bundled_plugin();
-        self.bundled_version = self.bundled.as_deref().and_then(integrations::plugin_version);
+        self.installs = integrations::find_installs();
+        let apps: Vec<HostApp> = HostApp::ALL.into_iter().filter(|a| self.installs.iter().any(|i| i.app == *a)).collect();
+        self.running = apps.iter().copied().filter(|a| integrations::app_running(*a)).collect();
+        self.bundled = apps
+            .iter()
+            .filter_map(|a| {
+                let path = integrations::bundled_plugin_for(*a)?;
+                let version = integrations::plugin_version(&path);
+                Some((*a, (path, version)))
+            })
+            .collect();
     }
 
     fn check(id: &'static str, label: &'static str, on: bool, f: impl Fn(&mut Settings, bool) + 'static) -> Checkbox {
@@ -301,13 +308,14 @@ impl SettingsView {
                     .p(px(10.))
                     .text_size(px(12.))
                     .text_color(pal.text_dim)
-                    .child(format!("No Adobe Illustrator found in {where_}.")),
+                    .child(format!("No Adobe Illustrator, Photoshop or InDesign found in {where_}.")),
             );
         }
         for (i, install) in self.installs.iter().enumerate() {
+            let bundled_version = self.bundled.get(&install.app).and_then(|(_, v)| v.clone());
             let (status, action): (String, Option<(&'static str, bool)>) = if !install.supported() {
-                (format!("Needs Illustrator {} or later", integrations::MIN_ILLUSTRATOR_YEAR), None)
-            } else if self.bundled.is_none() {
+                (format!("Needs {} {} or later", install.app.name(), integrations::MIN_YEAR), None)
+            } else if !self.bundled.contains_key(&install.app) {
                 (
                     match &install.installed_version {
                         Some(v) => format!("Plug-in {v}; this build doesn't include one"),
@@ -316,7 +324,7 @@ impl SettingsView {
                     install.installed_version.as_ref().map(|_| ("Remove", false)),
                 )
             } else {
-                match (&install.installed_version, &self.bundled_version) {
+                match (&install.installed_version, &bundled_version) {
                     (None, _) => ("Plug-in not installed".into(), Some(("Install", true))),
                     (Some(v), Some(latest)) if v != latest => (format!("Plug-in {v}, {latest} available"), Some(("Update", true))),
                     (Some(v), _) => (format!("Plug-in {v} installed"), Some(("Remove", false))),
@@ -344,16 +352,16 @@ impl SettingsView {
                             .size(px(18.))
                             .flex_shrink_0()
                             .rounded(px(4.))
-                            .bg(rgb(0x330000))
+                            .bg(rgb(app_colors(install.app).0))
                             .border_1()
-                            .border_color(rgb(0xff9a00))
+                            .border_color(rgb(app_colors(install.app).1))
                             .flex()
                             .items_center()
                             .justify_center()
                             .text_size(px(9.))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(0xff9a00))
-                            .child("Ai"),
+                            .text_color(rgb(app_colors(install.app).1))
+                            .child(install.app.badge()),
                     )
                     .child(
                         div()
@@ -397,14 +405,17 @@ impl SettingsView {
                 div()
                     .text_size(px(11.))
                     .text_color(pal.text_dim)
-                    .child("Automatically activates missing fonts when documents open in Illustrator, through the GlyphClub plug-in."),
+                    .child("Automatically activates missing fonts when documents open in Illustrator, Photoshop or InDesign, through GlyphClub's plug-ins."),
             )
-            .when(self.illustrator_running, |d| {
+            .when(!self.running.is_empty(), |d| {
+                let names: Vec<&str> = self.running.iter().map(|a| a.name()).collect();
+                let open = names.join(" and ");
+                let verb = if names.len() == 1 { "is" } else { "are" };
                 d.child(
                     div()
                         .text_size(px(11.))
                         .text_color(pal.text_dim)
-                        .child("Illustrator is open: restart it after installing the plug-in."),
+                        .child(format!("{open} {verb} open: restart after installing a plug-in.")),
                 )
             })
             .when_some(self.status.clone(), |d, (msg, err)| {
@@ -449,7 +460,7 @@ impl SettingsView {
 
     fn run_integration(&mut self, i: usize, uninstall: bool, cx: &mut Context<Self>) {
         let Some(install) = self.installs.get(i).cloned() else { return };
-        let bundled = self.bundled.clone();
+        let bundled = self.bundled.get(&install.app).map(|(path, _)| path.clone());
         self.busy = true;
         self.status = Some((
             if uninstall {
@@ -468,11 +479,11 @@ impl SettingsView {
                 .background_executor()
                 .spawn(async move {
                     if uninstall {
-                        integrations::uninstall(&install.plugins_dir).map(|_| format!("Removed from {}.", install.label))
+                        integrations::uninstall(install.app, &install.plugins_dir).map(|_| format!("Removed from {}.", install.label))
                     } else {
                         let source = bundled.ok_or_else(|| "This build doesn't include the plug-in.".to_string())?;
-                        integrations::install(&source, &install.plugins_dir)
-                            .map(|_| format!("Installed in {}. Restart Illustrator to load it.", install.label))
+                        integrations::install(install.app, &source, &install.plugins_dir)
+                            .map(|_| format!("Installed in {}. Restart {} to load it.", install.label, install.app.name()))
                     }
                 })
                 .await;
@@ -568,5 +579,14 @@ impl Render for SettingsView {
                     }),
             )
             .child(div().id("settings-body").flex_1().overflow_y_scroll().child(body))
+    }
+}
+
+/// The badge colors (background, mark) of each app's icon.
+fn app_colors(app: HostApp) -> (u32, u32) {
+    match app {
+        HostApp::Illustrator => (0x330000, 0xff9a00),
+        HostApp::Photoshop => (0x001e36, 0x31a8ff),
+        HostApp::InDesign => (0x49021f, 0xff3366),
     }
 }

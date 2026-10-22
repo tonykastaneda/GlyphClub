@@ -45,6 +45,8 @@ pub enum BridgeEvent {
     Show,
     Activate {
         fonts: Vec<String>,
+        /// The app asking: "Illustrator", "Photoshop", "InDesign".
+        app: String,
         reply: mpsc::Sender<ActivateOutcome>,
     },
     /// The catalog changed outside the app (glyphclub-cli).
@@ -211,11 +213,15 @@ fn handle(line: &str, token: &str, events: &mpsc::Sender<BridgeEvent>) -> Value 
     if !constant_time_eq(given.as_bytes(), token.as_bytes()) {
         return error("bad token");
     }
-    if let Some(version) = request.get("pluginVersion").and_then(Value::as_str) {
+    // Plug-ins say which app they're in; the version check below is the
+    // Illustrator plug-in's (older ones don't say, and are Illustrator's).
+    let host = request.get("host").and_then(Value::as_str).unwrap_or("illustrator");
+    let illustrator = host == "illustrator";
+    if let Some(version) = request.get("pluginVersion").and_then(Value::as_str).filter(|_| illustrator) {
         let _ = events.send(BridgeEvent::PluginVersionSeen(version.to_string(), latest_plugin_version()));
     }
     let mut reply = handle_method(&request, events);
-    if let (Some(object), Some(latest)) = (reply.as_object_mut(), latest_plugin_version()) {
+    if let (Some(object), Some(latest)) = (reply.as_object_mut(), latest_plugin_version().filter(|_| illustrator)) {
         object.insert("latestPluginVersion".to_string(), Value::String(latest));
     }
     reply
@@ -278,7 +284,13 @@ fn handle_method(request: &Value, events: &mpsc::Sender<BridgeEvent>) -> Value {
                 .map(|names| names.iter().filter_map(Value::as_str).map(str::to_string).collect())
                 .unwrap_or_default();
             let (reply, receive) = mpsc::channel();
-            if events.send(BridgeEvent::Activate { fonts, reply }).is_err() {
+            let app = match request.get("host").and_then(Value::as_str).unwrap_or("illustrator") {
+                "photoshop" => "Photoshop",
+                "indesign" => "InDesign",
+                _ => "Illustrator",
+            }
+            .to_string();
+            if events.send(BridgeEvent::Activate { fonts, app, reply }).is_err() {
                 return error("GlyphClub is quitting");
             }
             match receive.recv_timeout(Duration::from_secs(20)) {

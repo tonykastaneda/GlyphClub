@@ -29,6 +29,11 @@ if [ -d plugin/build/GlyphClub.aip ]; then
 elif [ -d plugin/prebuilt/GlyphClub.aip ]; then
   ditto plugin/prebuilt/GlyphClub.aip "$STAGE/Contents/Resources/GlyphClub.aip"
 fi
+PS_SDK="${PS_SDK:-$HOME/Developer/AdobePhotoshopSDK/pluginsdk/photoshopapi}"
+if [ -d "$PS_SDK/photoshop" ]; then
+  make -s -C plugin-photoshop PS_SDK="$PS_SDK" >/dev/null
+  ditto plugin-photoshop/build/GlyphClub.plugin "$STAGE/Contents/Resources/GlyphClub Photoshop.plugin"
+fi
 codesign --force --deep --sign - "$STAGE"
 
 echo "==> Installing to /Applications"

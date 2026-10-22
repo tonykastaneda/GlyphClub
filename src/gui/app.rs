@@ -990,7 +990,7 @@ impl GlyphClub {
     /// libraries have of the document's missing fonts.
     /// The Illustrator plug-in's request: activate whatever the libraries
     /// have of the document's missing fonts, per Settings ▸ Auto Activation.
-    pub fn activate_for_illustrator(&mut self, fonts: Vec<String>, cx: &mut Context<Self>) -> ActivateOutcome {
+    pub fn activate_for_illustrator(&mut self, fonts: Vec<String>, app: &str, cx: &mut Context<Self>) -> ActivateOutcome {
         let s = cx.global::<AppSettings>().0;
         let mut outcome = ActivateOutcome::default();
         let mut seen = HashSet::new();
@@ -1041,7 +1041,7 @@ impl GlyphClub {
         }
         if !outcome.activated.is_empty() && !s.silent_mode {
             let n = outcome.activated.len();
-            self.notify(format!("Activated {n} font{} for Illustrator", if n == 1 { "" } else { "s" }));
+            self.notify(format!("Activated {n} font{} for {app}", if n == 1 { "" } else { "s" }));
         }
         cx.notify();
         outcome
@@ -1049,9 +1049,9 @@ impl GlyphClub {
 
     pub fn handle_bridge(&mut self, event: BridgeEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
-            BridgeEvent::Activate { fonts, reply } => {
+            BridgeEvent::Activate { fonts, app, reply } => {
                 let outcome = if cx.global::<AppSettings>().0.auto_activate_illustrator {
-                    self.activate_for_illustrator(fonts, cx)
+                    self.activate_for_illustrator(fonts, &app, cx)
                 } else {
                     ActivateOutcome { not_found: Vec::new(), failed: fonts, ..Default::default() }
                 };

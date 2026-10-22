@@ -72,6 +72,23 @@ else
 fi
 
 # Fail before signing if the application metadata or branding is incomplete.
+# The Photoshop plug-in (plugin-photoshop/), built here from Adobe's
+# Photoshop SDK (default ~/Developer/AdobePhotoshopSDK; CI decrypts this
+# repo's own copy, see release.yml). Signed on its own first, like the
+# Illustrator one.
+PS_SDK="${PS_SDK:-$HOME/Developer/AdobePhotoshopSDK/pluginsdk/photoshopapi}"
+if [ -d "$PS_SDK/photoshop" ]; then
+  echo "==> Building the Photoshop plug-in"
+  make -C plugin-photoshop clean
+  make -C plugin-photoshop PS_SDK="$PS_SDK" SIGN_ID="$SIGN_IDENTITY"
+  ditto plugin-photoshop/build/GlyphClub.plugin "$APP_BUNDLE/Contents/Resources/GlyphClub Photoshop.plugin"
+elif [ -n "${REQUIRE_PS_PLUGIN:-}" ]; then
+  echo "ERROR: no Photoshop SDK at $PS_SDK" >&2
+  exit 1
+else
+  echo "==> WARNING: no Photoshop SDK at $PS_SDK, packaging without the Photoshop plug-in"
+fi
+
 plutil -lint "$APP_BUNDLE/Contents/Info.plist"
 test -s "$APP_BUNDLE/Contents/MacOS/GlyphClub"
 test -s "$APP_BUNDLE/Contents/Resources/GlyphClub.icns"

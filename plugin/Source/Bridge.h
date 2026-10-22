@@ -20,6 +20,11 @@ struct Result {
 	std::vector<std::string> activated, alreadyActive, notFound, failed;
 };
 
+// Which app this plug-in is in ("illustrator", "photoshop", "indesign") and
+// its own version: every request says so, so GlyphClub can tell its
+// plug-ins apart. Illustrator's plug-in is the default. Call once, first.
+void SetHost(const std::string& host, const std::string& version);
+
 // Is GlyphClub running with its bridge up? (Checks bridge.json and the pid.)
 void Ping(std::function<void(const Result&)> done);
 

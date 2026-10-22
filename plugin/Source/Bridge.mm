@@ -17,6 +17,9 @@ extern char** environ;
 namespace glyphclub::bridge {
 namespace {
 
+std::string gHost = "illustrator";
+std::string gVersion = GLYPHCLUB_VERSION;
+
 // Activation can mean copying fonts out of iCloud/Dropbox first.
 constexpr int kReplyTimeoutSeconds = 25;
 // How long a launched GlyphClub gets to open its catalog and start listening.
@@ -79,7 +82,8 @@ NSDictionary* Call(const Session& session, NSDictionary* request, std::string& e
 {
 	NSMutableDictionary* body = [request mutableCopy];
 	body[@"token"] = [NSString stringWithUTF8String:session.token.c_str()];
-	body[@"pluginVersion"] = @GLYPHCLUB_VERSION;
+	body[@"pluginVersion"] = [NSString stringWithUTF8String:gVersion.c_str()];
+	body[@"host"] = [NSString stringWithUTF8String:gHost.c_str()];
 	NSMutableData* line = [[NSJSONSerialization dataWithJSONObject:body options:0 error:nil] mutableCopy];
 	if (!line) { error = "couldn't encode the request"; return nil; }
 	[line appendBytes:"\n" length:1];
@@ -165,6 +169,12 @@ void Finish(std::function<void(const Result&)> done, Result result)
 }
 
 } // namespace
+
+void SetHost(const std::string& host, const std::string& version)
+{
+	gHost = host;
+	gVersion = version;
+}
 
 void Ping(std::function<void(const Result&)> done)
 {

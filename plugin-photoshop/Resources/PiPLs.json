@@ -1,0 +1,38 @@
+{
+	"PiPLs": [
+		{
+			"Kind": "Actions",
+			"Name": "Glyph Club",
+			"Category": "Glyph Club",
+			"Version": 1,
+			"SubVersion": 0,
+			"ComponentVersionShortNum": 27,
+			"ComponentVersionMinorRevNum": 0,
+			"ComponentVersionDotRevNum": 0,
+			"ComponentName": "GlyphClub",
+			"CodeMacARM64": "AutoPluginMain",
+			"CodeMacIntel64": "AutoPluginMain",
+			"CodeEntryPointWin64": "AutoPluginMain",
+			"Persistent": true,
+			"Messages": { "NoStartupRequired": false, "PurgeCache": false, "NoShutdownRequired": false, "AcceptProperty": true },
+			"HasTerminology": { "ClassID": "gLcB", "EventID": "gLcB", "ScopeString": "GlyphClub" },
+			"Terminology": {
+				"MajorVersion": 1, "MinorVersion": 0, "Language": 0, "ScriptCode": 0,
+				"Suites": [
+					{
+						"SuiteName": "Glyph Club", "SuitDescription": "Activates a document's missing fonts through GlyphClub", "SuiteID": "gLcB",
+						"SuiteLevel": 1, "SuiteVersion": 1,
+						"Events": [
+							{
+								"EventName": "Glyph Club", "EventDescription": "Asks GlyphClub for the current document's missing fonts", "ClassID": "gLcB", "EventType": "gLcB",
+								"ReplyType": "null", "DirectParamType": "#ImR",
+								"DirectParamFlagBits": { "DirectParamOptional": true, "ListOfItems": false, "Enumerated": true, "ChangesState": false },
+								"Parameters": []
+							}
+						]
+					}
+				]
+			}
+		}
+	]
+}

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>GlyphClub</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.tonykastaneda.glyphclub.photoshop</string>
+	<key>CFBundleName</key>
+	<string>GlyphClub</string>
+	<key>CFBundlePackageType</key>
+	<string>8LIZ</string>
+	<key>CFBundleSignature</key>
+	<string>8BIM</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>GlyphClub for Photoshop</string>
+</dict>
+</plist>

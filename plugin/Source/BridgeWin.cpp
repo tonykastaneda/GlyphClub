@@ -30,6 +30,9 @@ constexpr int kReplyTimeoutSeconds = 25;
 // How long a launched GlyphClub gets to open its catalog and start listening.
 constexpr int kLaunchWaitSeconds = 20;
 
+std::string gHost = "illustrator";
+std::string gVersion = GLYPHCLUB_VERSION;
+
 // ---- a small JSON reader: enough for bridge.json and the bridge's replies
 
 struct Json {
@@ -287,7 +290,7 @@ bool StartWinsock()
 bool Call(const Session& session, const std::string& fields, Json& reply, std::string& error)
 {
 	if (!StartWinsock()) { error = "no network"; return false; }
-	std::string line = "{\"token\":" + Quote(session.token) + ",\"pluginVersion\":" + Quote(GLYPHCLUB_VERSION) + "," + fields + "}\n";
+	std::string line = "{\"token\":" + Quote(session.token) + ",\"pluginVersion\":" + Quote(gVersion) + ",\"host\":" + Quote(gHost) + "," + fields + "}\n";
 
 	SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (s == INVALID_SOCKET) { error = "no socket"; return false; }
@@ -368,6 +371,12 @@ void Finish(std::function<void(const Result&)> done, Result result)
 }
 
 } // namespace
+
+void SetHost(const std::string& host, const std::string& version)
+{
+	gHost = host;
+	gVersion = version;
+}
 
 void Ping(std::function<void(const Result&)> done)
 {

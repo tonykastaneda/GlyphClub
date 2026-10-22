@@ -8,3 +8,7 @@
 
 # Windows plug-in builds (plugin/CMakeLists.txt)
 /plugin/build-win-*
+
+# Photoshop plug-in builds
+/plugin-photoshop/build
+/plugin-photoshop/build-win-*

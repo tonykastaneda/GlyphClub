@@ -91,6 +91,20 @@ jobs:
           APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
         run: echo "$APPLE_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/notary_key.p8"
 
+      # The Photoshop plug-in is built here from this repo's own encrypted
+      # copy of Adobe's Photoshop SDK ("sdk-photoshop-2026"), decrypted with
+      # the SDK_KEY secret.
+      - name: Download Photoshop SDK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_KEY: ${{ secrets.SDK_KEY }}
+        run: |
+          gh release download sdk-photoshop-2026 --repo "$GITHUB_REPOSITORY" --pattern AdobePhotoshopSDK.zip.enc --dir "$RUNNER_TEMP"
+          printf '%s' "$SDK_KEY" | openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$RUNNER_TEMP/AdobePhotoshopSDK.zip.enc" -out "$RUNNER_TEMP/AdobePhotoshopSDK.zip" -pass stdin
+          unzip -q "$RUNNER_TEMP/AdobePhotoshopSDK.zip" -d "$RUNNER_TEMP/pssdk"
+          echo "PS_SDK=$RUNNER_TEMP/pssdk/AdobePhotoshopSDK/pluginsdk/photoshopapi" >> "$GITHUB_ENV"
+          echo "REQUIRE_PS_PLUGIN=1" >> "$GITHUB_ENV"
+
       # The macOS Illustrator plug-in is built on the Mac that has Adobe's
       # SDK and committed as plugin/prebuilt (scripts/update-prebuilt-plugin.sh);
       # package-macos.sh checks it matches plugin/ and signs it.
