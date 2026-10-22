@@ -1,6 +1,7 @@
-# A Windows build to try out, without making a release: the same zip the
-# release has (GlyphClub.exe, icon fonts, the Illustrator plug-in for x64 and
-# ARM64), uploaded as this run's "GlyphClub-Windows" artifact.
+# A Windows build to try out, without making a release: what the release
+# has, uploaded as this run's artifacts: "GlyphClub-Setup" (the installer)
+# and "GlyphClub-Windows" (GlyphClub.exe, icon fonts, the Illustrator
+# plug-in for x64 and ARM64, unzipped).
 #
 #   gh workflow run windows-preview.yml
 name: Windows preview
@@ -48,9 +49,15 @@ jobs:
       - name: Build and package
         env:
           REQUIRE_PLUGIN: "1"
+          REQUIRE_INSTALLER: "1"
         run: ./scripts/package-windows.ps1
 
       - uses: actions/upload-artifact@v4
         with:
           name: GlyphClub-Windows
           path: target/package/windows/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GlyphClub-Setup
+          path: target/package/GlyphClub-Setup.exe

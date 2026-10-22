@@ -56,4 +56,24 @@ $ZipPath = "target/package/$ZipName"
 Remove-Item -Force $ZipPath -ErrorAction SilentlyContinue
 Compress-Archive -Path "$StageDir/*" -DestinationPath $ZipPath
 
+# The installer (packaging/windows/GlyphClub.iss), so people don't have to
+# keep the icon fonts and plug-ins next to the .exe themselves. Inno Setup 6
+# is preinstalled on GitHub's Windows runners.
+$Iscc = @(
+    (Get-Command iscc.exe -ErrorAction SilentlyContinue).Source,
+    "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+    "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+if ($Iscc) {
+    Write-Host "==> Building the installer"
+    $Stage = (Resolve-Path $StageDir).Path
+    & $Iscc /Q "/DAppVersion=$Version" "/DSourceDir=$Stage" packaging/windows/GlyphClub.iss
+    if ($LASTEXITCODE -ne 0) { throw "Building the installer failed" }
+    Write-Host "==> Done: target/package/GlyphClub-Setup.exe"
+} elseif ($env:REQUIRE_INSTALLER) {
+    throw "Inno Setup 6 (ISCC.exe) isn't installed"
+} else {
+    Write-Warning "Inno Setup 6 isn't installed; skipping the installer"
+}
+
 Write-Host "==> Done: $ZipPath"

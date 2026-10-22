@@ -168,12 +168,15 @@ jobs:
       - name: Build and package
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          REQUIRE_INSTALLER: "1"
         run: ./scripts/package-windows.ps1
 
       - uses: actions/upload-artifact@v4
         with:
           name: windows-zip
-          path: target/package/*.zip
+          path: |
+            target/package/*.zip
+            target/package/GlyphClub-Setup.exe
 
   release:
     needs: [macos, windows]
@@ -190,6 +193,7 @@ jobs:
           files: |
             artifacts/macos-dmg/*.dmg
             artifacts/windows-zip/*.zip
+            artifacts/windows-zip/GlyphClub-Setup.exe
           # Published as Latest, unless release-internal.yml asked for a
           # draft (its tag is made when the draft is published).
           tag_name: ${{ inputs.version && format('v{0}', inputs.version) || github.ref_name }}
