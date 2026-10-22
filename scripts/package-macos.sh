@@ -43,7 +43,7 @@ cp branding/macos/GlyphClub.icns "$APP_BUNDLE/Contents/Resources/GlyphClub.icns"
 ditto assets/icon-fonts "$APP_BUNDLE/Contents/Resources/icon-fonts"
 sed "s/__VERSION__/$VERSION/g" packaging/macos/Info.plist > "$APP_BUNDLE/Contents/Info.plist"
 
-# The Illustrator plug-in (plugin/, installed from Settings > Integrations)
+# The Illustrator plug-in (plugin/, installed from Settings > Auto Activation)
 # needs Adobe's Illustrator SDK, which can't live in this public repo — set
 # SDK to wherever it is (default ~/Developer/AdobeIllustratorSDK; CI
 # downloads it, see release.yml). Without it the app still builds, just
@@ -56,8 +56,19 @@ if [ -d "$SDK/illustratorapi" ]; then
   make -C plugin clean
   make -C plugin SDK="$SDK" SIGN_ID="$SIGN_IDENTITY"
   ditto plugin/build/GlyphClub.aip "$APP_BUNDLE/Contents/Resources/GlyphClub.aip"
+elif [ -d plugin/prebuilt/GlyphClub.aip ]; then
+  # No SDK (CI): ship the prebuilt plug-in, but only if it was built from
+  # the current sources (scripts/update-prebuilt-plugin.sh refreshes it).
+  if [ "$(scripts/plugin-source-hash.sh)" != "$(cat plugin/prebuilt/SOURCE_HASH)" ]; then
+    echo "ERROR: plugin/prebuilt is out of date with plugin/; run scripts/update-prebuilt-plugin.sh" >&2
+    exit 1
+  fi
+  echo "==> Using the prebuilt Illustrator plug-in"
+  ditto plugin/prebuilt/GlyphClub.aip "$APP_BUNDLE/Contents/Resources/GlyphClub.aip"
+  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Resources/GlyphClub.aip"
+  codesign --verify --strict "$APP_BUNDLE/Contents/Resources/GlyphClub.aip"
 else
-  echo "==> WARNING: no Illustrator SDK at $SDK, packaging without the Illustrator plug-in"
+  echo "==> WARNING: no Illustrator SDK at $SDK and no prebuilt plug-in, packaging without it"
 fi
 
 # Fail before signing if the application metadata or branding is incomplete.

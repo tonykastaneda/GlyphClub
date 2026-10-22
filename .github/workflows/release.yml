@@ -86,13 +86,13 @@ jobs:
       # committed here. With the ILLUSTRATOR_SDK_TOKEN secret (a token that
       # can read tonykastaneda/AA-ReColor-fork's releases), it's downloaded
       # from that repo's "sdk-illustrator-2026" release; without it the DMG
-      # just ships without the plug-in.
+      # uses the prebuilt plug-in in plugin/prebuilt (scripts/update-prebuilt-plugin.sh).
       - name: Download Illustrator SDK
         env:
           GH_TOKEN: ${{ secrets.ILLUSTRATOR_SDK_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "No ILLUSTRATOR_SDK_TOKEN secret; building without the Illustrator plug-in"
+            echo "No ILLUSTRATOR_SDK_TOKEN secret; packaging uses the prebuilt plug-in in plugin/prebuilt"
             exit 0
           fi
           gh release download sdk-illustrator-2026 --repo tonykastaneda/AA-ReColor-fork --pattern AdobeIllustratorSDK.zip --dir "$RUNNER_TEMP"
