@@ -121,8 +121,12 @@ pub fn set_menus(settings: &Settings, info_open: bool, _sidebar_open: bool, cx: 
         })
         .collect();
 
-    cx.set_menus(vec![
-        Menu::new("GlyphClub").items([
+    // macOS has its own app menu and Window menu; Windows puts Settings and
+    // Exit under File and About under Help, as Windows apps do.
+    let mac = cfg!(target_os = "macos");
+    let mut menus = Vec::new();
+    if mac {
+        menus.push(Menu::new("GlyphClub").items([
             MenuItem::action("About GlyphClub", About),
             MenuItem::action("Check for Updates…", CheckForUpdates),
             MenuItem::separator(),
@@ -135,59 +139,79 @@ pub fn set_menus(settings: &Settings, info_open: bool, _sidebar_open: bool, cx: 
             MenuItem::action("Show All", ShowAll),
             MenuItem::separator(),
             MenuItem::action("Quit GlyphClub", Quit),
-        ]),
-        Menu::new("File").items([
-            MenuItem::action("Add Library…", AddLibrary),
-            MenuItem::action("Sync Now", SyncNow),
-            MenuItem::separator(),
-            MenuItem::action("Export User Fonts…", ExportUserFonts),
-            MenuItem::separator(),
-            MenuItem::action("Close Window", CloseWindow),
-        ]),
-        Menu::new("Edit").items([
-            MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
-            MenuItem::os_action("Redo", input::Redo, OsAction::Redo),
-            MenuItem::separator(),
-            MenuItem::os_action("Cut", input::Cut, OsAction::Cut),
-            MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
-            MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
-            MenuItem::action("Select All", SelectAll),
-            MenuItem::separator(),
-            MenuItem::action("Find", Find),
-        ]),
-        Menu::new("View").items([
-            MenuItem::action("as Grid", ViewGrid).checked(settings.view_mode == ViewMode::Grid),
-            MenuItem::action("as List", ViewList).checked(settings.view_mode == ViewMode::List),
-            MenuItem::separator(),
-            MenuItem::action("Expand Font Families", ExpandFamilies).checked(settings.expand_families),
-            MenuItem::submenu(Menu::new("Sort By").items(sort_items)),
-            MenuItem::separator(),
-            MenuItem::action("Edit Preview Text", EditPreviewText),
-            MenuItem::action("Increase Size", ZoomIn),
-            MenuItem::action("Decrease Size", ZoomOut),
-            MenuItem::separator(),
-            MenuItem::action("Toggle Info Pane", ToggleInfo).checked(info_open),
-            MenuItem::action("Toggle Dark Mode", ToggleDarkMode),
-            MenuItem::action("Enter Full Screen", ToggleFullScreen),
-        ]),
-        Menu::new("Font").items([
-            MenuItem::action("Activate", Activate),
-            MenuItem::action("Activate Temporarily", ActivateTemporarily),
-            MenuItem::action("Deactivate", Deactivate),
-            MenuItem::separator(),
-            MenuItem::action("Star / Unstar", ToggleStar),
-            MenuItem::action("Copy Font Name", CopyFontName),
-            MenuItem::separator(),
-            MenuItem::action("Export…", ExportSelected),
-            MenuItem::action("Show in Finder", RevealSelected),
-            MenuItem::separator(),
-            MenuItem::action("Remove from Fontlist", RemoveFromFontlist),
-            MenuItem::action("Delete from Library…", DeleteSelected),
-        ]),
-        Menu::new("Window").items([
+        ]));
+    }
+    let mut file = vec![
+        MenuItem::action("Add Library…", AddLibrary),
+        MenuItem::action("Sync Now", SyncNow),
+        MenuItem::separator(),
+        MenuItem::action("Export User Fonts…", ExportUserFonts),
+        MenuItem::separator(),
+    ];
+    if mac {
+        file.push(MenuItem::action("Close Window", CloseWindow));
+    } else {
+        file.extend([MenuItem::action("Settings…", OpenSettings), MenuItem::separator(), MenuItem::action("Exit", Quit)]);
+    }
+    menus.push(Menu::new("File").items(file));
+    menus.push(Menu::new("Edit").items([
+        MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
+        MenuItem::os_action("Redo", input::Redo, OsAction::Redo),
+        MenuItem::separator(),
+        MenuItem::os_action("Cut", input::Cut, OsAction::Cut),
+        MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
+        MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
+        MenuItem::action("Select All", SelectAll),
+        MenuItem::separator(),
+        MenuItem::action("Find", Find),
+    ]));
+    menus.push(Menu::new("View").items([
+        MenuItem::action("as Grid", ViewGrid).checked(settings.view_mode == ViewMode::Grid),
+        MenuItem::action("as List", ViewList).checked(settings.view_mode == ViewMode::List),
+        MenuItem::separator(),
+        MenuItem::action("Expand Font Families", ExpandFamilies).checked(settings.expand_families),
+        MenuItem::submenu(Menu::new("Sort By").items(sort_items)),
+        MenuItem::separator(),
+        MenuItem::action("Edit Preview Text", EditPreviewText),
+        MenuItem::action("Increase Size", ZoomIn),
+        MenuItem::action("Decrease Size", ZoomOut),
+        MenuItem::separator(),
+        MenuItem::action("Toggle Info Pane", ToggleInfo).checked(info_open),
+        MenuItem::action("Toggle Dark Mode", ToggleDarkMode),
+        MenuItem::action("Enter Full Screen", ToggleFullScreen),
+    ]));
+    menus.push(Menu::new("Font").items([
+        MenuItem::action("Activate", Activate),
+        MenuItem::action("Activate Temporarily", ActivateTemporarily),
+        MenuItem::action("Deactivate", Deactivate),
+        MenuItem::separator(),
+        MenuItem::action("Star / Unstar", ToggleStar),
+        MenuItem::action("Copy Font Name", CopyFontName),
+        MenuItem::separator(),
+        MenuItem::action("Export…", ExportSelected),
+        MenuItem::action(if mac { "Show in Finder" } else { "Show in Explorer" }, RevealSelected),
+        MenuItem::separator(),
+        MenuItem::action("Remove from Fontlist", RemoveFromFontlist),
+        MenuItem::action("Delete from Library…", DeleteSelected),
+    ]));
+    if mac {
+        menus.push(Menu::new("Window").items([
             MenuItem::action("Minimize", Minimize),
             MenuItem::action("Zoom", ZoomWindow),
-        ]),
-        Menu::new("Help").items([MenuItem::action("GlyphClub on GitHub", OpenGitHub)]),
-    ]);
+        ]));
+        menus.push(Menu::new("Help").items([MenuItem::action("GlyphClub on GitHub", OpenGitHub)]));
+        cx.set_menus(menus);
+    } else {
+        menus.push(Menu::new("Help").items([
+            MenuItem::action("About GlyphClub", About),
+            MenuItem::action("Check for Updates…", CheckForUpdates),
+            MenuItem::separator(),
+            MenuItem::action("GlyphClub on GitHub", OpenGitHub),
+        ]));
+        // Windows has no global menu bar: the in-window one (AppMenuBar, in
+        // the title bar strip) reads its menus from gpui-kit's GlobalState,
+        // not from cx.set_menus.
+        let owned = menus.into_iter().map(Menu::owned).collect();
+        gpui_kit::component::GlobalState::global_mut(cx).set_app_menus(owned);
+    }
 }
