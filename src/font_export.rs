@@ -348,7 +348,6 @@ mod platform {
     use windows::Win32::Graphics::Gdi::RemoveFontResourceW;
     use windows::Win32::System::Registry::{
         RegCloseKey, RegDeleteValueW, RegEnumValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE,
-        REG_VALUE_TYPE,
     };
     use windows::Win32::UI::WindowsAndMessaging::{SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_FONTCHANGE};
 
@@ -392,14 +391,14 @@ mod platform {
                 let mut name_len = name.len() as u32;
                 let mut data = vec![0u8; 4096];
                 let mut data_len = data.len() as u32;
-                let mut kind = REG_VALUE_TYPE::default();
+                let mut kind = 0u32;
                 let status = RegEnumValueW(
                     key,
                     index,
                     Some(PWSTR(name.as_mut_ptr())),
                     &mut name_len,
                     None,
-                    Some(&mut kind),
+                    Some(&mut kind as *mut u32),
                     Some(data.as_mut_ptr()),
                     Some(&mut data_len),
                 );
