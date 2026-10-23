@@ -85,6 +85,9 @@ pub struct GlyphClub {
     /// glyphclub-cli's `drop-preview on`: shows the drag-over overlay with
     /// no drag, for screenshots.
     pub drop_preview: bool,
+    /// The export wizard, while its dialog is open (for `glyphclub-cli app
+    /// export …`).
+    pub export_wizard: Option<WeakEntity<crate::export_wizard::ExportWizard>>,
     /// Families expanded into their faces in the list view, by key.
     pub expanded: HashSet<SharedString>,
     pub sample: Entity<InputState>,
@@ -248,6 +251,7 @@ impl GlyphClub {
             drop_flash: None,
             drops: 0,
             drop_preview: false,
+            export_wizard: None,
             expanded: HashSet::new(),
             sample,
             search,
@@ -672,36 +676,59 @@ impl GlyphClub {
         .detach();
     }
 
-    pub fn export_user_fonts(&mut self, cx: &mut Context<Self>) {
-        let dest = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Export Here".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(dirs))) = dest.await else { return };
-            let Some(dir) = dirs.into_iter().next() else { return };
-            let result = cx
-                .background_executor()
-                .spawn(async move { font_export::export_user_fonts(&dir) })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(s) => this.notify(format!(
-                        "Exported {} font{} to {}{}{}",
-                        s.copied,
-                        if s.copied == 1 { "" } else { "s" },
-                        s.dest.display(),
-                        if s.skipped > 0 { format!(", {} already there", s.skipped) } else { String::new() },
-                        if s.failed > 0 { format!(", {} failed", s.failed) } else { String::new() },
-                    )),
-                    Err(e) => this.notify_error(format!("Export failed: {e:#}")),
+    pub fn export_user_fonts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        crate::export_wizard::open(self, window, cx);
+    }
+
+    /// The export wizard's "Yes, Manage Them": makes `dest` a library (when
+    /// it isn't in one), activates the exported fonts from it, then
+    /// uninstalls the originals from the Fonts folder, only the ones whose
+    /// copies are active, so nothing an app uses goes missing.
+    pub fn manage_exported(
+        &mut self,
+        dest: PathBuf,
+        library: bool,
+        exported: Vec<(PathBuf, PathBuf)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.run_job("Moving your fonts into GlyphClub…", move |c| {
+            if library {
+                c.rescan()?;
+            } else {
+                c.add_folder(&dest.to_string_lossy())?;
+            }
+            let key = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+            let copies: HashSet<PathBuf> = exported.iter().map(|(_, copy)| key(copy)).collect();
+            let mut active = c.active_ids()?;
+            let mut ready = HashSet::new();
+            for row in c.list_fonts("")? {
+                let path = key(Path::new(&row.record.path));
+                if !copies.contains(&path) {
+                    continue;
                 }
-                cx.notify();
-            });
-        })
-        .detach();
+                if !active.contains(&row.id) && c.toggle_activation(row.id).unwrap_or(false) {
+                    active.insert(row.id);
+                }
+                if active.contains(&row.id) {
+                    ready.insert(path);
+                }
+            }
+            let (ready, waiting): (Vec<_>, Vec<_>) =
+                exported.into_iter().partition(|(_, copy)| ready.contains(&key(copy)));
+            let removed = font_export::remove_originals(&ready);
+            let mut msg = format!(
+                "GlyphClub now manages {} font{}: activated, and removed from your Fonts folder",
+                removed.removed,
+                if removed.removed == 1 { "" } else { "s" }
+            );
+            let left = removed.failed + waiting.len();
+            if left > 0 {
+                msg.push_str(&format!(
+                    ". {left} stayed installed (in use, or couldn't be activated); try again after quitting the apps using them"
+                ));
+            }
+            Ok(Some(msg + "."))
+        }, cx);
     }
 
     /// Font ▸ Remove from Fontlist: forgets the files (they stay on disk,
@@ -1266,7 +1293,7 @@ impl GlyphClub {
             .on_action(cx.listener(|_, _: &OpenSettings, _, cx| crate::settings_window::open(None, cx)))
             .on_action(cx.listener(|this, _: &AddLibrary, _, cx| this.prompt_add_library(cx)))
             .on_action(cx.listener(|this, _: &SyncNow, _, cx| this.rescan(cx)))
-            .on_action(cx.listener(|this, _: &ExportUserFonts, _, cx| this.export_user_fonts(cx)))
+            .on_action(cx.listener(|this, _: &ExportUserFonts, window, cx| this.export_user_fonts(window, cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| {
                 this.search.update(cx, |s, cx| s.focus(window, cx));
             }))

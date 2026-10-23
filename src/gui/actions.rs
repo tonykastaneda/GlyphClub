@@ -165,7 +165,7 @@ pub fn set_menus(settings: &Settings, info_open: bool, _sidebar_open: bool, cx: 
         MenuItem::action("Add Library…", AddLibrary),
         MenuItem::action("Sync Now", SyncNow),
         MenuItem::separator(),
-        MenuItem::action("Export User Fonts…", ExportUserFonts),
+        MenuItem::submenu(Menu::new("Export").items([MenuItem::action("User Installed Fonts…", ExportUserFonts)])),
         MenuItem::separator(),
     ];
     if mac {

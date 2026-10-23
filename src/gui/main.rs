@@ -9,6 +9,7 @@ mod bridge;
 mod chrome;
 mod detail;
 mod drop_overlay;
+mod export_wizard;
 mod fit;
 mod grid;
 mod icon_view;

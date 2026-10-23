@@ -12,7 +12,8 @@ use crate::settings::{AppSettings, Appearance, SortField, ViewMode};
 pub const HELP: &str = "state | view grid|list | nav all|system|starred|recents|library <name>|tag <name>|icons <set> | \
 select <family>… | deselect | info open|close | tab preview|sizes|glyphs|features|info | face <style> | \
 sample <text> | size <n> | search <text> | sort <field> [asc|desc] | expand on|off | sidebar show|hide | \
-theme light|dark|system | window <w> <h> | settings general|sidebar|import|auto | action <name> | scroll top|<row> | drop-preview on|off|flash | illustrator-apply <family> | \
+theme light|dark|system | window <w> <h> | settings general|sidebar|import|auto | action <name> | scroll top|<row> | drop-preview on|off|flash | \
+export open|folder <path>|library <name>|next|back|policy overwrite|choose|append|pick mine|theirs|manage yes|no|close | illustrator-apply <family> | \
 icon-copy <set> <icon> [vectors|svg]";
 
 impl GlyphClub {
@@ -224,6 +225,29 @@ impl GlyphClub {
                 window.dispatch_action(action, cx);
             }
             // The drag-over overlay without a drag, for screenshots.
+            // The export wizard, page by page: what its clicks do.
+            "export" => {
+                // Deferred: dialogs can't open or close while the window's
+                // root is mid-update, as it is here.
+                if arg(0) == "open" {
+                    cx.defer_in(window, |this, window, cx| this.export_user_fonts(window, cx));
+                } else {
+                    let wizard = self
+                        .export_wizard
+                        .as_ref()
+                        .and_then(|w| w.upgrade())
+                        .ok_or("the export wizard isn't open (export open)")?;
+                    let args = args.to_vec();
+                    // Outside this view's update too: finishing calls back into it.
+                    window.defer(cx, move |window, cx| {
+                        wizard.update(cx, |w, cx| {
+                            if let Err(e) = w.drive(&args, window, cx) {
+                                eprintln!("export {}: {e}", args.join(" "));
+                            }
+                        });
+                    });
+                }
+            }
             "drop-preview" => {
                 self.drops += 1;
                 match arg(0) {
@@ -362,8 +386,10 @@ impl GlyphClub {
                     .to_string()
             });
         let size = window.viewport_size();
+        let export = self.export_wizard.as_ref().and_then(|w| w.upgrade()).map(|w| w.read(cx).state());
         json!({
             "pid": std::process::id(),
+            "exportWizard": export,
             "window": { "width": f32::from(size.width), "height": f32::from(size.height) },
             "compact": self.compact,
             "nav": nav,

@@ -60,6 +60,12 @@ pub fn parse_faces(data: &[u8], path: &Path, mtime: i64, size: i64) -> Vec<FontR
         .collect()
 }
 
+/// The first face's full name (`name` ID 4), e.g. "Helvetica Neue Bold".
+pub fn full_name(data: &[u8]) -> Option<String> {
+    let face = ttf_parser::Face::parse(data, 0).ok()?;
+    best_name(&face, 4, 4).map(|n| n.trim().to_string()).filter(|n| !n.is_empty())
+}
+
 /// Prefers the typographic/preferred name entry, falling back to the legacy one,
 /// and prefers a Unicode/Windows platform entry (which decodes cleanly as UTF-16).
 fn best_name(face: &ttf_parser::Face, preferred_id: u16, fallback_id: u16) -> Option<String> {

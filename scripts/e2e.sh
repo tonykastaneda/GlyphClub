@@ -110,7 +110,8 @@ cli icon-svg phosphor airplane "$T/a.svg" >/dev/null 2>&1
 check "icon exports as SVG paths" grep -q ' d="M' "$T/a.svg"
 cp "$LIB/typicons.ttf" "$UFONTS/../user-e2e.ttf"
 cli export-user-fonts "$T/export" >/dev/null 2>&1
-check "export user fonts" test -d "$T/export/User-FontExport"
+check "export user fonts" cmp -s "$T/export/user-e2e.ttf" "$LIB/typicons.ttf"
+check "export leaves GlyphClub's activations out" test ! -e "$T/export/glyphclub"
 
 print "==> Running app"
 cli activate "$FAM3" >/dev/null 2>&1   # a manual activation that must survive a restart
@@ -157,6 +158,50 @@ if [[ $visual == 1 ]]; then
   cli app window 1400 900 >/dev/null 2>&1; sleep 0.5; [[ $(st "d['compact']") == False ]] && ok "wide window un-compacts" || bad "wide window un-compacts"
   cli app screenshot "$T/shot.png" >/dev/null 2>&1; [[ $(stat -f%z "$T/shot.png" 2>/dev/null || echo 0) -gt 20000 ]] && ok "screenshot renders" || bad "screenshot renders"
 fi
+
+print "==> Export wizard"
+# File > Export > User Installed Fonts, page by page, into a folder that
+# already has a different user-a.ttf.
+FONTS="$HOME/Library/Fonts"; EXP="$T/Exported"
+# Fonts of its own (not the library's), so what it activates doesn't
+# change the tests after it.
+IA=assets/icon-fonts/bootstrap-icons/font.ttf; IB=assets/icon-fonts/boxicons/font.ttf; IC=assets/icon-fonts/devicon/font.ttf
+mkdir -p "$EXP"
+rm -f "$FONTS/user-e2e.ttf"
+cp "$IA" "$FONTS/user-a.ttf"; cp "$IC" "$FONTS/user-b.ttf"
+cp "$IB" "$EXP/user-a.ttf"
+wz() { cli app state | j "(d.get('exportWizard') or {}).get('$1')"; }
+wait_step() { for _ in {1..40}; do [[ $(wz step) == $1 ]] && return 0; sleep 0.25; done; return 1; }
+shot() { [[ $visual == 1 ]] && { sleep 0.4; cli app screenshot "${E2E_SHOTS:-$T}/export-$1.png" >/dev/null 2>&1; }; true; }
+cli app export open >/dev/null 2>&1
+wait_step Destination && ok "wizard opens on Destination" || bad "wizard opens on Destination" "$(wz step)"
+cli app export folder "$EXP" >/dev/null 2>&1; shot 1-destination
+cli app export next >/dev/null 2>&1
+wait_step Conflicts && [[ $(wz conflicts) == 1 ]] && ok "wizard finds the name conflict" || bad "wizard finds the name conflict" "$(wz step) $(wz conflicts)"
+cli app export policy choose >/dev/null 2>&1; shot 2-conflicts
+cli app export next >/dev/null 2>&1
+wait_step "Choose(0)" && ok "Let Me Choose shows the conflict" || bad "Let Me Choose shows the conflict" "$(wz step)"
+shot 3-choose
+cli app export pick mine >/dev/null 2>&1
+wait_step Manage && [[ $(wz exported) == 2 ]] && ok "wizard exports both fonts" || bad "wizard exports both fonts" "$(wz step) $(wz exported)"
+shot 4-manage
+check "picking your copy overwrites the folder's" cmp -s "$EXP/user-a.ttf" "$IA"
+cli app export manage yes >/dev/null 2>&1
+for _ in {1..40}; do [[ ! -e "$FONTS/user-a.ttf" && ! -e "$FONTS/user-b.ttf" ]] && break; sleep 0.25; done
+[[ ! -e "$FONTS/user-a.ttf" && ! -e "$FONTS/user-b.ttf" ]] && ok "manage removes the originals from Fonts" || bad "manage removes the originals from Fonts"
+check "manage makes the folder a library" sh -c "\"$CLI_BIN\" --json libraries | grep -q Exported"
+n=$(cli --json list --active --library Exported | j "len(d['families'])" 2>/dev/null)
+[[ $n == 2 ]] && ok "manage activates the exported fonts" || bad "manage activates the exported fonts" "$n"
+# Again into the library, appending: yours comes in as user-a-1.ttf.
+cp "$IC" "$FONTS/user-a.ttf"
+cli app export open >/dev/null 2>&1; wait_step Destination
+cli app export library Exported >/dev/null 2>&1; cli app export next >/dev/null 2>&1
+wait_step Conflicts; cli app export policy append >/dev/null 2>&1; cli app export next >/dev/null 2>&1
+wait_step Manage && cmp -s "$EXP/user-a-1.ttf" "$IC" && cmp -s "$EXP/user-a.ttf" "$IA" \
+  && ok "append keeps both copies" || bad "append keeps both copies" "$(wz step)"
+cli app export manage no >/dev/null 2>&1
+check "Not Now leaves the original installed" test -e "$FONTS/user-a.ttf"
+[[ $(wz step) == None ]] && ok "wizard closes" || bad "wizard closes"
 
 print "==> Illustrator plug-in protocol"
 reply=$(python3 -I - "$DATA/bridge.json" "$PS1" <<'PY'

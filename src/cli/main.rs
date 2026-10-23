@@ -77,8 +77,15 @@ enum Command {
         #[arg(required = true)]
         fonts: Vec<String>,
     },
-    /// Copy every user-installed font into <folder>/User-FontExport.
-    ExportUserFonts { folder: PathBuf },
+    /// Copy every user-installed font into <folder> (subfolders kept).
+    ExportUserFonts {
+        folder: PathBuf,
+        /// What to do when <folder> already has a different file by the
+        /// same name: overwrite it, keep it (skip yours), or append -1, -2…
+        /// to yours.
+        #[arg(long, default_value = "keep", value_parser = ["overwrite", "keep", "append"])]
+        conflicts: String,
+    },
     /// List the bundled icon sets, or the icons in one.
     Icons { set: Option<String> },
     /// Save one icon as an SVG of vector paths (what dragging it out does).
@@ -382,16 +389,28 @@ fn run(cli: &Cli) -> Result<()> {
                 );
             }
         }
-        Command::ExportUserFonts { folder } => {
-            let summary = glyphclub::font_export::export_user_fonts(folder)?;
+        Command::ExportUserFonts { folder, conflicts } => {
+            use glyphclub::font_export::{self, Resolution};
+            let resolution = match conflicts.as_str() {
+                "overwrite" => Resolution::Overwrite,
+                "append" => Resolution::Append,
+                _ => Resolution::KeepTheirs,
+            };
+            let plan = font_export::plan_user_export(folder)?;
+            let s = font_export::run(&plan, |_| resolution);
             done(
                 json_out,
                 &format!(
-                    "Exported {} to {} ({} already there, {} failed)",
-                    summary.copied,
-                    summary.dest.display(),
-                    summary.skipped,
-                    summary.failed
+                    "Exported {} of {} fonts to {}: {} copied, {} overwritten, {} renamed, {} kept the folder's copy, {} already there, {} failed",
+                    s.total(),
+                    plan.items.len(),
+                    s.dest.display(),
+                    s.copied,
+                    s.overwritten,
+                    s.renamed,
+                    s.kept,
+                    s.identical,
+                    s.failed
                 ),
             );
         }
