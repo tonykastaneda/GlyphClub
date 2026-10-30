@@ -128,3 +128,30 @@ that profile name, which the script uses by default.
 - `branding/` — the source SVGs/icon assets for this README and the app
   (dock icon, menu bar icon, Windows icon).
 - `docs/` — the project's marketing site.
+
+### Start on Login on macOS
+
+On macOS 13 and later, the packaged, signed GlyphClub.app uses Apple's
+ServiceManagement login-item API. Enable **Start on Login** in GlyphClub's
+settings; GlyphClub appears in System Settings → General → Login Items →
+**Open at Login**. Changes made there (or through a startup-app manager)
+are reflected in GlyphClub rather than overwritten on the next launch.
+If approval is needed, GlyphClub opens the Login Items panel.
+
+The first launch migrates an enabled preference and removes/unloads the
+old `~/Library/LaunchAgents/com.tonykastaneda.glyphclub.plist` registration.
+Development binaries (`cargo run`) and macOS 12 keep the LaunchAgent fallback.
+Login launches use the launch Apple Event to stay in the menu bar when
+**Run GlyphClub in background** is enabled. The `--background` argument
+continues to work for integrations.
+
+If you previously created an lc job for GlyphClub, remove
+`~/.config/lc/jobs/glyphclub.sh` and run `lc sync` after installing this
+version. The app then controls its own registration; lc can manage it as
+a Startup App. The backup plist in lc's `migrated` directory is optional
+and can be removed.
+
+To verify the migration, check that GlyphClub appears under **Open at Login**,
+that its old plist is absent from `~/Library/LaunchAgents`, and that `lc list`
+shows it under Startup Apps. With background mode enabled, log out and back
+in to verify it starts once with a menu bar icon and no window.

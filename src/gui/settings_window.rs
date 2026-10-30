@@ -63,6 +63,12 @@ pub fn change(cx: &mut App, f: impl FnOnce(&mut Settings)) {
 }
 
 pub fn open(page: Option<Page>, cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    {
+        let settings = &mut cx.global_mut::<AppSettings>().0;
+        settings.launch_on_startup = glyphclub::login_item::is_enabled();
+        settings.save();
+    }
     if let Some((handle, view)) = cx.try_global::<SettingsWindowHandle>().map(|h| (h.0, h.1.clone())) {
         let reused = handle.update(cx, |_, window, _| window.activate_window()).is_ok();
         if reused {

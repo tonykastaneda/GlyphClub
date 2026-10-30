@@ -1,12 +1,7 @@
 //! Settings ▸ General ▸ Start on Login.
 //!
-//! macOS: a LaunchAgent in `~/Library/LaunchAgents` (works for a
-//! `cargo run` build too, unlike `SMAppService`, which needs the .app). It
-//! launches GlyphClub.app through `open` when there is one, so it starts
-//! like any other app. Windows: the per-user `Run` registry key.
-//!
-//! Whether GlyphClub then shows its window or starts silently is the Menu
-//! Bar / System Tray setting's call, not this one's.
+//! Packaged macOS 13+ apps use ServiceManagement; development builds and
+//! macOS 12 retain the LaunchAgent fallback. Windows uses the Run key.
 
 use std::path::PathBuf;
 
@@ -15,11 +10,31 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
     platform::set_enabled(enabled)
 }
 
-/// Rewrites the registration with this copy's current location — run at
-/// every launch while the setting is on, so moving or updating GlyphClub
-/// doesn't leave login pointing at an old path.
+/// Refresh only registrations that depend on the executable's current path.
 pub fn refresh() {
-    let _ = platform::set_enabled(true);
+    if !uses_native_service() {
+        let _ = platform::set_enabled(true);
+    }
+}
+
+pub fn uses_native_service() -> bool {
+    #[cfg(target_os = "macos")]
+    return platform::use_sm_app_service();
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
+/// Read macOS's actual selection, including changes made in System Settings.
+#[cfg(target_os = "macos")]
+pub fn is_enabled() -> bool {
+    platform::is_enabled()
+}
+
+pub fn launched_at_login() -> bool {
+    #[cfg(target_os = "macos")]
+    return platform::launched_at_login();
+    #[cfg(not(target_os = "macos"))]
+    false
 }
 
 fn current_exe() -> Result<PathBuf, String> {
@@ -34,14 +49,166 @@ mod platform {
 
     fn agent_path() -> Result<PathBuf, String> {
         let home = dirs::home_dir().ok_or("no home folder")?;
-        Ok(home.join("Library/LaunchAgents").join(format!("{LABEL}.plist")))
+        Ok(home
+            .join("Library/LaunchAgents")
+            .join(format!("{LABEL}.plist")))
     }
 
-    fn xml_escape(s: &str) -> String {
-        s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    fn bundled_app() -> Option<PathBuf> {
+        super::current_exe()
+            .ok()?
+            .ancestors()
+            .nth(3)
+            .filter(|p| p.extension().is_some_and(|e| e == "app"))
+            .map(PathBuf::from)
+    }
+
+    pub fn use_sm_app_service() -> bool {
+        use objc2_foundation::{NSOperatingSystemVersion, NSProcessInfo};
+        bundled_app().is_some()
+            && NSProcessInfo::processInfo().isOperatingSystemAtLeastVersion(
+                NSOperatingSystemVersion {
+                    majorVersion: 13,
+                    minorVersion: 0,
+                    patchVersion: 0,
+                },
+            )
+    }
+
+    fn remove_legacy_agent() -> Result<(), String> {
+        let path = agent_path()?;
+        // Deleting the file does not unload an already bootstrapped job.
+        let uid = std::process::Command::new("/usr/bin/id")
+            .arg("-u")
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !uid.status.success() {
+            return Err("could not determine login user".into());
+        }
+        let target = format!(
+            "gui/{}/{}",
+            String::from_utf8_lossy(&uid.stdout).trim(),
+            LABEL
+        );
+        // Only boot out an existing job. Preserve unexpected unload failures
+        // so migration can retry rather than silently leave two login starts.
+        let loaded = std::process::Command::new("/bin/launchctl")
+            .args(["print", &target])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if loaded.status.success() {
+            let output = std::process::Command::new("/bin/launchctl")
+                .args(["bootout", &target])
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !output.status.success() {
+                return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+            }
+        }
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     pub fn set_enabled(enabled: bool) -> Result<(), String> {
+        use objc2_service_management::{SMAppService, SMAppServiceStatus};
+        if !use_sm_app_service() {
+            return legacy_set_enabled(enabled);
+        }
+        // All SMAppService calls are guarded by the macOS 13 availability check.
+        unsafe {
+            let service = SMAppService::mainAppService();
+            let status = service.status();
+            let result = if enabled {
+                if status == SMAppServiceStatus::Enabled {
+                    Ok(())
+                } else {
+                    service.registerAndReturnError()
+                }
+            } else if status == SMAppServiceStatus::NotRegistered {
+                Ok(())
+            } else {
+                service.unregisterAndReturnError()
+            };
+            if enabled && service.status() == SMAppServiceStatus::RequiresApproval {
+                SMAppService::openSystemSettingsLoginItems();
+                // Registration exists but needs consent. Finish migration without
+                // retrying registration (or reopening Settings) on every launch.
+                return remove_legacy_agent();
+            }
+            // Preserve the old registration if registering the replacement failed.
+            result.map_err(|e| e.localizedDescription().to_string())?;
+        }
+        remove_legacy_agent()
+    }
+
+    pub fn is_enabled() -> bool {
+        use objc2_service_management::{SMAppService, SMAppServiceStatus};
+        if use_sm_app_service() {
+            unsafe { SMAppService::mainAppService().status() == SMAppServiceStatus::Enabled }
+        } else {
+            agent_path().is_ok_and(|p| p.exists())
+        }
+    }
+
+    pub fn launched_at_login() -> bool {
+        use objc2_foundation::NSAppleEventManager;
+        // AERegistry.h: kCoreEventClass, kAEOpenApplication, keyAEPropData,
+        // keyAELaunchedAsLogInItem. Read while AppKit handles the launch event.
+        NSAppleEventManager::sharedAppleEventManager()
+            .currentAppleEvent()
+            .is_some_and(|e| is_login_event(&e))
+    }
+
+    fn is_login_event(event: &objc2_foundation::NSAppleEventDescriptor) -> bool {
+        Some(event)
+            .filter(|e| {
+                e.eventClass() == u32::from_be_bytes(*b"aevt")
+                    && e.eventID() == u32::from_be_bytes(*b"oapp")
+            })
+            .and_then(|e| e.paramDescriptorForKeyword(u32::from_be_bytes(*b"prdt")))
+            .is_some_and(|p| p.enumCodeValue() == u32::from_be_bytes(*b"lgit"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use objc2_foundation::NSAppleEventDescriptor as Descriptor;
+
+        fn open_event(id: [u8; 4]) -> objc2::rc::Retained<Descriptor> {
+            Descriptor::appleEventWithEventClass_eventID_targetDescriptor_returnID_transactionID(
+                u32::from_be_bytes(*b"aevt"),
+                u32::from_be_bytes(id),
+                None,
+                -1,
+                0,
+            )
+        }
+
+        #[test]
+        fn recognizes_login_launch_but_not_manual_launch_or_reopen() {
+            objc2::rc::autoreleasepool(|_| {
+                let event = open_event(*b"oapp");
+                assert!(!is_login_event(&event));
+                let login = Descriptor::descriptorWithEnumCode(u32::from_be_bytes(*b"lgit"));
+                event.setParamDescriptor_forKeyword(&login, u32::from_be_bytes(*b"prdt"));
+                assert!(is_login_event(&event));
+                let reopen = open_event(*b"rapp");
+                reopen.setParamDescriptor_forKeyword(&login, u32::from_be_bytes(*b"prdt"));
+                assert!(!is_login_event(&reopen));
+            });
+        }
+    }
+
+    fn xml_escape(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    }
+
+    fn legacy_set_enabled(enabled: bool) -> Result<(), String> {
         let path = agent_path()?;
         if !enabled {
             return match std::fs::remove_file(&path) {
@@ -51,11 +218,7 @@ mod platform {
             };
         }
         let exe = super::current_exe()?;
-        // GlyphClub.app/Contents/MacOS/GlyphClub -> GlyphClub.app
-        let app = exe
-            .ancestors()
-            .nth(3)
-            .filter(|p| p.extension().is_some_and(|e| e == "app"));
+        let app = bundled_app();
         let arguments: Vec<String> = match app {
             // --background: a login start stays in the menu bar.
             Some(app) => vec![

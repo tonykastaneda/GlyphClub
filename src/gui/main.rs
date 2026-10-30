@@ -94,8 +94,18 @@ fn sync_tray(settings: &Settings, cx: &mut App) {
 /// What a Settings change does beyond saving: the login item and the tray.
 fn apply_settings_change(before: &Settings, after: &Settings, cx: &mut App) {
     if before.launch_on_startup != after.launch_on_startup {
-        if let Err(e) = login_item::set_enabled(after.launch_on_startup) {
+        let result = login_item::set_enabled(after.launch_on_startup);
+        if let Err(e) = &result {
             eprintln!("login item: {e}");
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let settings = &mut cx.global_mut::<AppSettings>().0;
+            if result.is_ok() && login_item::uses_native_service() {
+                settings.native_login_item_migrated = true;
+            }
+            settings.launch_on_startup = login_item::is_enabled();
+            settings.save();
         }
     }
     if before.menu_bar != after.menu_bar {
@@ -212,7 +222,21 @@ fn main() {
     // Temporary activations never outlive a session, even a crashed one.
     catalog.drop_leftover_temporary_activations();
 
-    let settings = Settings::load();
+    let mut settings = Settings::load();
+    #[cfg(target_os = "macos")]
+    if login_item::uses_native_service() {
+        if !settings.native_login_item_migrated {
+            match login_item::set_enabled(settings.launch_on_startup || login_item::is_enabled()) {
+                Ok(()) => settings.native_login_item_migrated = true,
+                Err(e) => eprintln!("login item migration: {e}"),
+            }
+        }
+        // Once migrated, the OS owns this state. Never re-register on launch.
+        if settings.native_login_item_migrated {
+            settings.launch_on_startup = login_item::is_enabled();
+        }
+        settings.save();
+    }
     if settings.launch_on_startup {
         // Rewrites the login item to point at this build.
         login_item::refresh();
@@ -228,6 +252,7 @@ fn main() {
     let application = gpui_kit::application().with_assets(AppAssets);
     application.on_reopen(show_main_window);
     application.run(move |cx| {
+        let background = background || login_item::launched_at_login();
         gpui_kit::init(cx);
         #[cfg(target_os = "macos")]
         set_app_icon();

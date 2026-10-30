@@ -67,6 +67,8 @@ pub enum ViewMode {
 #[serde(default)]
 pub struct Settings {
     pub launch_on_startup: bool,
+    /// The old preference has been reconciled with ServiceManagement once.
+    pub native_login_item_migrated: bool,
     /// A menu bar icon; GlyphClub then starts as just that icon and closing
     /// the window hides it there instead of quitting.
     pub menu_bar: bool,
@@ -105,6 +107,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             launch_on_startup: false,
+            native_login_item_migrated: false,
             menu_bar: false,
             global_shortcut_enabled: false,
             sidebar_show_all: true,
